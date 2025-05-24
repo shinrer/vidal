@@ -1,0 +1,62 @@
+{% extends "layout.html" %}
+
+{% block title %}Ask a Question about Medications - {{ super() }}{% endblock %}
+
+{% block content %}
+    <h2>Ask a Question about Medications</h2>
+
+    {% if not app_config_ai_resources_loaded or not llm_interface_available %}
+        <div class="alert alert-danger">
+            The Question Answering feature is currently unavailable. 
+            {% if not app_config_ai_resources_loaded %}
+                Core AI resources (embeddings, search index) could not be loaded. 
+            {% endif %}
+            {% if not llm_interface_available %}
+                The local LLM interface is not available (Ollama library or server might be missing/down).
+            {% endif %}
+            Please check server logs for details.
+        </div>
+    {% else %}
+        <p>Ask a question in French about medications. The system will try to answer based on the information contained in the RCP documents.</p>
+        
+        <form method="post" action="{{ url_for('qa_page') }}">
+            <textarea name="user_question" rows="3" style="width: 98%; font-size: 1em;" placeholder="Ex: Quelles sont les précautions d'emploi de l'aspirine ?">{{ request.form.get('user_question', '') if user_question is none else user_question }}</textarea>
+            <button type="submit" style="margin-top: 10px;">Ask</button>
+        </form>
+
+        {% if qa_result %}
+            <hr style="margin-top: 30px; margin-bottom: 20px;">
+            <h3>Your Question:</h3>
+            <p><em>{{ user_question }}</em></p>
+
+            <h3>Answer:</h3>
+            {# The answer might contain newlines, so using <pre> or rendering newlines as <br> might be good. #}
+            {# For now, let's assume the LLM provides reasonably formatted text. #}
+            <div style="background-color: #e9f5ff; padding: 10px; border-radius: 4px; border: 1px solid #bce8f1;">
+                {{ qa_result.answer | nl2br | safe if qa_result.answer else "No answer generated." }}
+            </div>
+
+            {% if qa_result.retrieved_chunks %}
+                <div style="margin-top: 20px;">
+                    <details>
+                        <summary style="cursor: pointer; color: #007bff;">Show Retrieved Context ({{ qa_result.retrieved_chunks | length }} chunk(s))</summary>
+                        <pre style="background-color: #f9f9f9; border: 1px solid #eee; padding: 10px; margin-top: 10px; max-height: 300px; overflow-y: auto;">{{ qa_result.retrieved_context }}</pre>
+                    </details>
+                </div>
+            {% elif qa_result.retrieved_context %} {# Show context even if no specific chunks (e.g. error message might use context) #}
+                 <div style="margin-top: 20px;">
+                    <details>
+                        <summary style="cursor: pointer; color: #007bff;">Show Retrieved Context</summary>
+                        <pre style="background-color: #f9f9f9; border: 1px solid #eee; padding: 10px; margin-top: 10px; max-height: 300px; overflow-y: auto;">{{ qa_result.retrieved_context }}</pre>
+                    </details>
+                </div>
+            {% endif %}
+        {% elif request.method == 'POST' and user_question %} 
+            {# This case handles if qa_result is None after a POST with a question (e.g. initial error before RAG) #}
+            <hr style="margin-top: 30px; margin-bottom: 20px;">
+            <h3>Your Question:</h3>
+            <p><em>{{ user_question }}</em></p>
+            <p>Could not process the question or retrieve an answer at this time.</p>
+        {% endif %}
+    {% endif %} {# End of check for AI resources loaded #}
+{% endblock %}

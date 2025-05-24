@@ -15,7 +15,9 @@
                 <input type="text" name="query" placeholder="Search medications..." value="{{ request.args.get('query', '') }}">
                 <button type="submit">Search</button>
             </form>
-            <a href="{{ url_for('update_database_placeholder') }}" style="color: #fff; text-decoration: underline;">Update Database</a>
+            <a href="{{ url_for('semantic_search_page') }}" style="color: #fff; margin-left: 10px;">Semantic Search</a>
+            <a href="{{ url_for('qa_page') }}" style="color: #fff; margin-left: 10px;">Q&A</a>
+            <a href="{{ url_for('trigger_update') }}" style="color: #fff; text-decoration: underline; margin-left: 10px;">Update Database</a>
             <!-- Add more navigation links here if needed -->
         </nav>
     </header>

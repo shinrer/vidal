@@ -27,3 +27,7 @@ medicaments.db
 
 # Ignore update process metadata
 update_metadata.json
+
+# Ignore AI model artifacts and generated indexes
+app/ai_processing/rcp_embeddings.faiss
+app/ai_processing/faiss_index_to_chunk_id.json

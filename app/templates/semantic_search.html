@@ -1,0 +1,46 @@
+{% extends "layout.html" %}
+
+{% block title %}Semantic Search for RCPs - {{ super() }}{% endblock %}
+
+{% block content %}
+    <h2>Semantic Search for RCP Documents</h2>
+
+    {% if not app_config_ai_resources_loaded %}
+        <div class="alert alert-danger">
+            Semantic search is currently unavailable. AI resources could not be loaded. 
+            Please check server logs for details. This may be due to missing model files, 
+            FAISS index, or required AI libraries.
+        </div>
+    {% else %}
+        <p>Ask a question or enter keywords to find relevant sections in the "Résumé des Caractéristiques du Produit" (RCP) documents.</p>
+        
+        <form method="post" action="{{ url_for('semantic_search_page') }}">
+            <textarea name="query" rows="4" style="width: 98%; font-size: 1em;" placeholder="E.g., 'Quels sont les effets secondaires du Doliprane ?' or 'hypertension et grossesse'">{{ query if query else '' }}</textarea>
+            <br>
+            <button type="submit" style="margin-top: 10px;">Search</button>
+        </form>
+
+        {% if query and results is not none %} {# results can be an empty list #}
+            <hr style="margin-top: 30px; margin-bottom: 20px;">
+            <h3>Search Results for: "{{ query }}"</h3>
+            {% if results %}
+                {% for result in results %}
+                    <div class="detail-section" style="border-bottom: 1px dashed #ccc; padding-bottom: 15px; margin-bottom:15px;">
+                        <h4>
+                            <a href="{{ url_for('medicament_detail', code_cis=result.code_cis) }}">{{ result.denomination }}</a>
+                            <small>(CIS: {{ result.code_cis }})</small>
+                        </h4>
+                        <p><strong>Similarity Score:</strong> {{ "%.4f"|format(result.score) }}</p>
+                        <p><strong>Relevant Passage (Chunk ID: {{ result.chunk_id }}):</strong></p>
+                        <pre style="background-color: #f0f8ff; border-left: 3px solid #3498db;">{{ result.text }}</pre>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p>No relevant information found for your query.</p>
+            {% endif %}
+        {% elif query and results is none and app_config_ai_resources_loaded %}
+             {# This case might occur if search itself failed post-submission with loaded resources, though less likely with current error handling #}
+            <p>There was an issue performing the search. Please try again.</p>
+        {% endif %}
+    {% endif %}
+{% endblock %}
