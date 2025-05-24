@@ -24,3 +24,6 @@ Thumbs.db
 # Ignore database files
 *.db
 medicaments.db
+
+# Ignore update process metadata
+update_metadata.json

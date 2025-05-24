@@ -1,0 +1,26 @@
+{% extends "layout.html" %}
+
+{% block title %}Confirm Database Update - {{ super() }}{% endblock %}
+
+{% block content %}
+    <h2>Confirm Database Update</h2>
+    <p>This process will attempt to download the latest data, import it into the database, and crawl for RCP documents. It can take a significant amount of time, especially the RCP crawling step.</p>
+    
+    <h3>Current Update Status:</h3>
+    <ul>
+        <li><strong>Last Download Attempt:</strong> {{ metadata.last_download_attempt_date or 'Never' }}</li>
+        <li><strong>Last Successful Download:</strong> {{ metadata.last_successful_download_date or 'Never' }}</li>
+        <li><strong>Last Downloaded ZIP URL:</strong> {{ metadata.last_downloaded_zip_url or 'N/A' }}</li>
+        <li><strong>Last Downloaded ZIP Publication Date:</strong> {{ metadata.last_downloaded_zip_publication_date or 'N/A' }}</li>
+        <li><strong>Last Successful Full Update (Download, Import, Crawl):</strong> {{ metadata.last_successful_full_update_date or 'Never' }}</li>
+        <li><strong>Database Schema Version:</strong> {{ metadata.database_schema_version or 'N/A' }}</li>
+    </ul>
+
+    <p><strong>Note:</strong> The download script (`download_bdpm.py`) requires manual user intervention to download the ZIP file if it's a new version or if forced. The Flask application will trigger this script, but you will need to monitor the console output where `download_bdpm.py` runs if manual steps are required. This route will wait for all scripts to complete.</p>
+
+    <form method="post" action="{{ url_for('trigger_update') }}">
+        <button type="submit" onclick="this.disabled=true;this.form.submit();this.value='Updating... Please wait.';">Start Full Database Update</button>
+    </form>
+    <br>
+    <p><a href="{{ url_for('medicament_list') }}">Cancel and Back to Medicament List</a></p>
+{% endblock %}

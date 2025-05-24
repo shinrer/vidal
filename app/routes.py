@@ -1,12 +1,23 @@
-from flask import render_template, request, abort, url_for, redirect
+from flask import render_template, request, abort, url_for, redirect, Markup
 from app import app # Import the app instance from app/__init__.py
 from app.models import (
     get_all_medicaments, get_medicaments_count, get_medicament_by_cis,
-    search_medicaments, search_medicaments_count # Import search functions
+    search_medicaments, search_medicaments_count
 )
+from app.update_utils import load_metadata, save_metadata # For update process
 import math
+import subprocess # For running external scripts
+import sys # To get current python interpreter
+from pathlib import Path # For script paths
+import datetime # For updating metadata timestamps
 
 PER_PAGE = 20
+
+# Define paths to the update scripts (assuming they are in the project root)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DOWNLOAD_SCRIPT_PATH = PROJECT_ROOT / "download_bdpm.py"
+IMPORT_SCRIPT_PATH = PROJECT_ROOT / "import_structured_data.py"
+CRAWL_SCRIPT_PATH = PROJECT_ROOT / "crawl_rcp.py"
 
 @app.route('/')
 @app.route('/medicaments')
@@ -134,4 +145,100 @@ def update_database_placeholder():
     """
     Placeholder route for the database update functionality.
     """
-    return render_template('update_placeholder.html')
+    return render_template('update_placeholder.html') # Will be replaced/renamed
+
+
+@app.route('/admin/update-database', methods=['GET', 'POST'])
+def trigger_update():
+    """
+    Handles the database update process.
+    GET: Displays a confirmation page with metadata.
+    POST: Triggers the update scripts and shows their output.
+    """
+    metadata = load_metadata()
+
+    if request.method == 'POST':
+        script_outputs = []
+        overall_success = True # Track if all scripts run successfully
+
+        def run_script(script_path: Path, script_name: str):
+            nonlocal overall_success # Allow modification of outer scope variable
+            output_log = f"--- Running {script_name} ---\n"
+            try:
+                # Ensure script_path is absolute for subprocess
+                absolute_script_path = str(script_path.resolve())
+                result = subprocess.run(
+                    [sys.executable, absolute_script_path],
+                    capture_output=True,
+                    text=True,
+                    check=False, # Do not raise exception on non-zero exit
+                    cwd=PROJECT_ROOT # Run script from project root
+                )
+                output_log += result.stdout
+                if result.stderr:
+                    output_log += f"\n--- Errors from {script_name} ---\n"
+                    output_log += result.stderr
+                
+                if result.returncode != 0:
+                    output_log += f"\n--- {script_name} finished with error (return code: {result.returncode}) ---\n"
+                    overall_success = False # Mark overall success as false
+                else:
+                    output_log += f"\n--- {script_name} finished successfully ---\n"
+            except FileNotFoundError:
+                output_log += f"ERROR: Script not found at {script_path}\n"
+                overall_success = False
+            except Exception as e:
+                output_log += f"ERROR: An unexpected error occurred while trying to run {script_name}: {e}\n"
+                overall_success = False
+            
+            script_outputs.append(output_log)
+            return result.returncode if 'result' in locals() else -1 # Return code or -1 if script not found
+
+        # Run the scripts
+        # Note: download_bdpm.py requires manual input if not a new version and not in test mode.
+        # This might hang here if not handled (e.g. by running download_bdpm.py with a flag for non-interactive mode if possible)
+        # For now, assuming manual step is handled or script is modified for non-interactive updates.
+        
+        log_info("Starting database update process via web trigger...") # Use app's logger if available
+
+        # 1. Download script
+        run_script(DOWNLOAD_SCRIPT_PATH, "download_bdpm.py")
+        # Currently, we continue even if download fails, import might still work if files are present.
+
+        # 2. Import script
+        # Only run import if download was perceived as successful or if we always want to try
+        # For simplicity, we run it. If download failed to get new files, import will use old ones or fail if none.
+        run_script(IMPORT_SCRIPT_PATH, "import_structured_data.py")
+
+        # 3. Crawl script
+        # Similar logic for crawl script
+        run_script(CRAWL_SCRIPT_PATH, "crawl_rcp.py")
+
+        # After all scripts
+        if overall_success:
+            metadata['last_successful_full_update_date'] = datetime.datetime.now().isoformat()
+            log_info("Database update process completed successfully via web trigger.")
+        else:
+            log_error("Database update process completed with one or more errors via web trigger.")
+            # last_successful_full_update_date is NOT updated if any script fails
+        
+        # `last_download_attempt_date` and other specific dates are updated by individual scripts.
+        # `save_metadata` is also called by individual scripts.
+        # However, we save again here to capture `last_successful_full_update_date`.
+        save_metadata(metadata) 
+
+        # Render status page
+        return render_template('update_status.html', 
+                               script_output=Markup("<br>".join(script_outputs).replace("\n", "<br>")),
+                               overall_success=overall_success)
+
+    # For GET request:
+    return render_template('update_confirmation.html', metadata=metadata)
+
+
+# Helper for logging within routes if needed (can be expanded)
+def log_info(message):
+    print(f"INFO: {message}", file=sys.stderr)
+
+def log_error(message):
+    print(f"ERROR: {message}", file=sys.stderr)

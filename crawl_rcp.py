@@ -144,107 +144,247 @@ def insert_rcp_data(conn: sqlite3.Connection, code_cis: str, texte_rcp: str, ext
 
 
 # --- Main Crawling Logic ---
-def crawl_single_rcp(conn: sqlite3.Connection, code_cis: str, retries: int = 1):
+def crawl_single_rcp(conn: sqlite3.Connection, code_cis: str, retries: int = 1) -> tuple[bool, str | None]:
     """
     Crawls and processes a single RCP document for a given CIS code.
-    Returns True if successfully processed or skipped (404), False if a persistent error occurred.
+    Returns (success_status, server_last_modified_date_str).
+    success_status is True if processed/skipped (404), False on persistent error.
+    server_last_modified_date_str is the 'Last-Modified' header or None.
     """
     url = RCP_URL_TEMPLATE.format(code_cis)
     log_info(f"Processing CIS: {code_cis} - URL: {url}")
+    server_last_modified_date_str = None
 
-    time.sleep(random.uniform(MIN_DELAY, MAX_DELAY)) # Polite delay
+    time.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
 
     try:
         response = requests.get(url, headers={'User-Agent': USER_AGENT}, timeout=REQUEST_TIMEOUT)
+        server_last_modified_date_str = response.headers.get('Last-Modified')
         
         if response.status_code == 200:
             soup = BeautifulSoup(response.content, 'html.parser')
             rcp_text = extract_rcp_text(soup)
 
-            if not rcp_text or len(rcp_text) < 100: # Arbitrary short length check
-                log_warning(f"RCP text extracted for CIS {code_cis} seems empty or too short. Page structure might have changed or text is minimal.")
-                # Decide if to save or not. For now, save what's found.
-                # If it's consistently an issue, this might warrant not saving.
-
+            if not rcp_text or len(rcp_text) < 100:
+                log_warning(f"RCP text for CIS {code_cis} seems empty/short. Page structure might have changed.")
+            
             current_datetime_iso = datetime.datetime.now().isoformat()
             insert_rcp_data(conn, code_cis, rcp_text, current_datetime_iso)
-            log_info(f"Successfully crawled and saved RCP for CIS: {code_cis}")
-            return True
+            log_info(f"Successfully crawled/saved RCP for CIS: {code_cis}")
+            return True, server_last_modified_date_str
 
         elif response.status_code == 404:
             log_warning(f"RCP not found (404) for CIS: {code_cis} at URL: {url}")
-            # Optionally, insert a record indicating it's a known 404? For now, just skip.
-            return True # Treat as "processed" for skipping purposes
+            return True, server_last_modified_date_str # Treat as "processed" for skipping
 
         else:
             log_error(f"HTTP error {response.status_code} for CIS {code_cis}: {response.reason}", code_cis=code_cis)
-            if retries > 0 and response.status_code >= 500: # Retry for server errors
+            if retries > 0 and response.status_code >= 500:
                 log_info(f"Retrying CIS {code_cis} after a longer delay...")
                 time.sleep(random.uniform(5.0, 10.0))
                 return crawl_single_rcp(conn, code_cis, retries - 1)
-            return False # Persistent non-404 client error or server error after retries
+            return False, server_last_modified_date_str
 
     except requests.exceptions.Timeout:
-        log_error(f"Timeout occurred for CIS {code_cis}", code_cis=code_cis)
+        log_error(f"Timeout for CIS {code_cis}", code_cis=code_cis)
         if retries > 0:
-            log_info(f"Retrying CIS {code_cis} after a longer delay (timeout)...")
+            log_info(f"Retrying CIS {code_cis} (timeout)...")
             time.sleep(random.uniform(5.0, 10.0))
             return crawl_single_rcp(conn, code_cis, retries - 1)
-        return False
+        return False, server_last_modified_date_str
     except requests.exceptions.RequestException as e:
         log_error(f"Request exception for CIS {code_cis}: {e}", code_cis=code_cis)
-        # Could implement more nuanced retry for specific request exceptions (e.g. ConnectionError)
-        return False # Generally, non-timeout request exceptions are not retried here
-    except sqlite3.Error: # Handled by insert_rcp_data by raising, caught here
-        log_error(f"Database error during processing of CIS {code_cis} (already logged by insert_rcp_data). Skipping.", code_cis=code_cis)
-        return False # DB error, don't retry this CIS in this run
+        return False, server_last_modified_date_str
+    except sqlite3.Error:
+        log_error(f"DB error for CIS {code_cis} (already logged). Skipping.", code_cis=code_cis)
+        return False, server_last_modified_date_str
     except Exception as e:
         log_error(f"Unexpected error processing CIS {code_cis}: {e}", code_cis=code_cis)
-        return False
+        return False, server_last_modified_date_str
 
+def get_rcp_extraction_date_from_db(conn: sqlite3.Connection, code_cis: str) -> str | None:
+    """Fetches the date_derniere_extraction_rcp for a given CIS from the RCPs table."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT date_derniere_extraction_rcp FROM RCPs WHERE code_cis = ?", (code_cis,))
+        row = cursor.fetchone()
+        return row[0] if row and row[0] else None
+    except sqlite3.Error as e:
+        log_error(f"Error fetching RCP extraction date for CIS {code_cis}: {e}")
+        return None
+
+def parse_http_date(date_str: str) -> datetime.datetime | None:
+    """Parses an HTTP-style date string (RFC 1123) into a datetime object."""
+    if not date_str:
+        return None
+    try:
+        # Example: "Wed, 21 Oct 2015 07:28:00 GMT"
+        return datetime.datetime.strptime(date_str, "%a, %d %b %Y %H:%M:%S %Z")
+    except ValueError as e:
+        log_warning(f"Could not parse HTTP date string '{date_str}': {e}")
+        return None
 
 def crawl_all_rcps():
-    """Main function to orchestrate the RCP crawling process."""
-    log_info("--- Starting RCP Crawler Script ---")
+    """Main function to orchestrate the RCP crawling process with targeted updates."""
+    log_info("--- Starting RCP Crawler Script (Enhanced Update Logic) ---")
     
-    cis_codes_to_process = load_cis_codes(JSON_CIS_CODES_FILE)
-    if not cis_codes_to_process:
-        log_error("No CIS codes loaded. Exiting.")
+    latest_cis_list = load_cis_codes(JSON_CIS_CODES_FILE)
+    if not latest_cis_list:
+        log_error("No CIS codes loaded from JSON. Exiting.")
         return
 
     conn = None
     try:
         conn = get_db_connection()
-        processed_cis_set = get_processed_rcps(conn)
+        db_rcp_cis_list_set = get_processed_rcps(conn) # This returns a set
+        latest_cis_set = set(latest_cis_list)
+
+        new_cis_to_crawl = latest_cis_set - db_rcp_cis_list_set
+        disappeared_cis_to_delete = db_rcp_cis_list_set - latest_cis_set
+        existing_cis_to_check = latest_cis_set.intersection(db_rcp_cis_list_set)
+
+        log_info(f"Total CIS codes from JSON: {len(latest_cis_set)}")
+        log_info(f"CIS codes already in RCPs DB: {len(db_rcp_cis_list_set)}")
+        log_info(f"New CIS codes to crawl: {len(new_cis_to_crawl)}")
+        log_info(f"Disappeared CIS codes to delete from RCPs: {len(disappeared_cis_to_delete)}")
+        log_info(f"Existing CIS codes to check for updates: {len(existing_cis_to_check)}")
+
+        # 1. Process Disappeared CIS Codes
+        if disappeared_cis_to_delete:
+            log_info(f"Processing {len(disappeared_cis_to_delete)} disappeared CIS codes for RCP deletion...")
+            deleted_count = 0
+            for i, code_cis in enumerate(disappeared_cis_to_delete):
+                try:
+                    with conn: # Auto-commit/rollback for each deletion for simplicity here
+                        cursor = conn.cursor()
+                        cursor.execute("DELETE FROM RCPs WHERE code_cis = ?", (code_cis,))
+                        if cursor.rowcount > 0:
+                            log_info(f"({i+1}/{len(disappeared_cis_to_delete)}) Deleted RCP for disappeared CIS: {code_cis}")
+                            deleted_count +=1
+                        else:
+                            log_warning(f"({i+1}/{len(disappeared_cis_to_delete)}) No RCP found in DB to delete for supposedly disappeared CIS: {code_cis}")
+                except sqlite3.Error as e:
+                    log_error(f"Error deleting RCP for CIS {code_cis}: {e}")
+            log_info(f"Finished deleting RCPs for disappeared CIS codes. Total deleted: {deleted_count}")
         
-        total_codes = len(cis_codes_to_process)
-        skipped_due_to_existing = 0
-        successfully_processed_new = 0
-        failed_processing = 0
+        # 2. Process New CIS Codes
+        processed_new_count = 0
+        failed_new_count = 0
+        if new_cis_to_crawl:
+            log_info(f"Processing {len(new_cis_to_crawl)} new CIS codes for RCP crawling...")
+            for i, code_cis in enumerate(new_cis_to_crawl):
+                log_info(f"Crawling NEW ({i+1}/{len(new_cis_to_crawl)}): CIS {code_cis}")
+                success, _ = crawl_single_rcp(conn, code_cis)
+                if success:
+                    processed_new_count += 1
+                else:
+                    failed_new_count += 1
+            log_info(f"Finished crawling new CIS codes. Success: {processed_new_count}, Failed: {failed_new_count}")
 
-        for i, code_cis in enumerate(cis_codes_to_process):
-            log_info(f"Processing {i+1}/{total_codes}: CIS {code_cis}")
-            if code_cis in processed_cis_set:
-                log_info(f"Skipping CIS {code_cis}, RCP already in database.")
-                skipped_due_to_existing += 1
-                continue
+        # 3. Process Existing/Common CIS Codes
+        updated_existing_count = 0
+        failed_existing_count = 0
+        skipped_existing_count = 0 # Count those not needing update
+        if existing_cis_to_check:
+            log_info(f"Processing {len(existing_cis_to_check)} existing CIS codes for potential RCP update...")
+            for i, code_cis in enumerate(existing_cis_to_check):
+                log_info(f"Checking EXISTING ({i+1}/{len(existing_cis_to_check)}): CIS {code_cis}")
+                needs_recrawl = False
+                reason = ""
+
+                # Attempt Strategy 1: Last-Modified Header
+                # For this, crawl_single_rcp needs to return the header.
+                # We will do a HEAD request first, if possible, or analyze response from GET.
+                # For simplicity, crawl_single_rcp already does a GET and can return the header.
+                
+                # To avoid a full GET just for the date, let's try a HEAD request first.
+                server_last_modified_header = None
+                try:
+                    head_url = RCP_URL_TEMPLATE.format(code_cis)
+                    time.sleep(random.uniform(0.5, 1.5)) # Shorter delay for HEAD
+                    head_response = requests.head(head_url, headers={'User-Agent': USER_AGENT}, timeout=10, allow_redirects=True)
+                    server_last_modified_header = head_response.headers.get('Last-Modified')
+                except requests.RequestException as e:
+                    log_warning(f"HEAD request failed for CIS {code_cis}: {e}. Will proceed to GET or age-based check.")
+
+                if server_last_modified_header:
+                    server_date_dt = parse_http_date(server_last_modified_header)
+                    if server_date_dt:
+                        db_extraction_date_str = get_rcp_extraction_date_from_db(conn, code_cis)
+                        if db_extraction_date_str:
+                            try:
+                                db_date_dt = datetime.datetime.fromisoformat(db_extraction_date_str)
+                                # Make db_date_dt timezone-aware if server_date_dt is (HTTP dates are GMT/UTC)
+                                # Assuming server_date_dt is UTC from parse_http_date.
+                                # ISO format might or might not have TZ. If not, assume local or UTC based on how it was stored.
+                                # For simplicity, if db_date_dt is naive, assume it's compatible with UTC for comparison.
+                                if db_date_dt.tzinfo is None and server_date_dt.tzinfo is not None:
+                                    db_date_dt = db_date_dt.replace(tzinfo=datetime.timezone.utc) 
+
+                                if server_date_dt > db_date_dt:
+                                    needs_recrawl = True
+                                    reason = f"Server 'Last-Modified' ({server_last_modified_header}) is newer than DB date ({db_extraction_date_str})."
+                                else:
+                                    reason = "Server 'Last-Modified' not newer. Skipping re-crawl based on date header."
+                            except ValueError:
+                                log_warning(f"Could not parse DB date '{db_extraction_date_str}' for CIS {code_cis}. Will re-crawl.")
+                                needs_recrawl = True # Fallback to re-crawl if DB date is unparseable
+                                reason = "Could not parse DB date for comparison."
+                        else:
+                            needs_recrawl = True # No DB date, so crawl
+                            reason = "No previous extraction date in DB."
+                    else: # Could not parse server Last-Modified header
+                        log_warning(f"Could not parse 'Last-Modified' header ('{server_last_modified_header}') for CIS {code_cis}. Falling back to age-based check.")
+                        # Fall through to Strategy 2
+                
+                if not needs_recrawl and not server_last_modified_header: # If Strategy 1 was skipped or failed to yield a decision
+                    # Strategy 2: Age-Based Re-crawl
+                    db_extraction_date_str = get_rcp_extraction_date_from_db(conn, code_cis)
+                    if db_extraction_date_str:
+                        try:
+                            db_date_dt = datetime.datetime.fromisoformat(db_extraction_date_str)
+                            # Ensure comparison is between offset-naive and offset-aware or both aware.
+                            # Assuming now() is naive (local time). Convert db_date_dt to naive if it's aware.
+                            if db_date_dt.tzinfo is not None:
+                                db_date_dt = db_date_dt.astimezone(None).replace(tzinfo=None) # Convert to local naive
+
+                            if (datetime.datetime.now() - db_date_dt).days > 30:
+                                needs_recrawl = True
+                                reason = f"RCP data older than 30 days (extracted: {db_extraction_date_str})."
+                            else:
+                                reason = "RCP data not older than 30 days. Skipping re-crawl."
+                        except ValueError:
+                            log_warning(f"Could not parse DB date '{db_extraction_date_str}' for CIS {code_cis} for age check. Re-crawling.")
+                            needs_recrawl = True
+                            reason = "Could not parse DB date for age-based check."
+                    else:
+                        needs_recrawl = True # No DB date, so crawl
+                        reason = "No previous extraction date in DB (age-based check)."
+                
+                if needs_recrawl:
+                    log_info(f"Re-crawling CIS {code_cis}: {reason}")
+                    success, _ = crawl_single_rcp(conn, code_cis)
+                    if success:
+                        updated_existing_count += 1
+                    else:
+                        failed_existing_count += 1
+                else:
+                    log_info(f"Skipping re-crawl for CIS {code_cis}: {reason}")
+                    skipped_existing_count +=1
             
-            if crawl_single_rcp(conn, code_cis):
-                successfully_processed_new +=1
-            else:
-                failed_processing +=1
-            
-            if (i + 1) % 50 == 0: # Log progress every 50 CISS
-                log_info(f"Progress: {i+1}/{total_codes} CISS processed. Current stats: {successfully_processed_new} new, {skipped_due_to_existing} skipped, {failed_processing} failed.")
+            log_info(f"Finished checking existing CIS codes. Updated: {updated_existing_count}, Failed: {failed_existing_count}, Skipped (up-to-date): {skipped_existing_count}")
 
-        log_info("--- RCP Crawling Finished ---")
-        log_info(f"Summary: Total CIS codes: {total_codes}")
-        log_info(f"  Skipped (already in DB): {skipped_due_to_existing}")
-        log_info(f"  Successfully processed new: {successfully_processed_new}")
-        log_info(f"  Failed to process: {failed_processing}")
 
-    except Exception as e: # Catch-all for major issues during setup or loop
+        log_info("--- RCP Crawler Enhanced Update Finished ---")
+        log_info(f"Summary - Total from JSON: {len(latest_cis_set)}")
+        log_info(f"  Disappeared RCPs deleted: {deleted_count if 'deleted_count' in locals() else 0}")
+        log_info(f"  New RCPs: Success: {processed_new_count}, Failed: {failed_new_count}")
+        log_info(f"  Existing RCPs: Updated: {updated_existing_count}, Failed Update: {failed_existing_count}, Skipped (up-to-date): {skipped_existing_count}")
+
+    except Exception as e:
         log_error(f"Major error in crawl_all_rcps: {e}")
+        import traceback
+        traceback.print_exc() # Print full traceback for debugging major errors
     finally:
         if conn:
             conn.close()

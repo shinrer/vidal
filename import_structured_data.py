@@ -44,7 +44,7 @@ def import_cis_bdpm(cursor: sqlite3.Cursor, file_path: Path):
                         unique_cis_set.add(code_cis)
 
                     cursor.execute("""
-                        INSERT INTO Medicaments (
+                        INSERT OR REPLACE INTO Medicaments (
                             code_cis, denomination, forme_pharmaceutique, voies_administration,
                             statut_administratif, type_procedure_amm, etat_commercialisation, date_amm,
                             statut_bdpv, numero_autorisation_europeenne, titulaires, surveillance_renforcee
@@ -53,8 +53,8 @@ def import_cis_bdpm(cursor: sqlite3.Cursor, file_path: Path):
                           statut_administratif, type_procedure_amm, etat_commercialisation, date_amm,
                           statut_bdpv, numero_autorisation_europeenne, titulaires, surveillance_renforcee))
                     imported_count += 1
-                except sqlite3.IntegrityError as e:
-                    log_error(f"Integrity error (e.g., duplicate primary key {fields[0]}) inserting row from {file_path.name} at line {line_num}: {e}", fields)
+                except sqlite3.IntegrityError as e: # Should be less frequent with INSERT OR REPLACE for PK conflicts
+                    log_error(f"Integrity error (e.g., foreign key constraint) inserting/replacing row from {file_path.name} at line {line_num}: {e}", fields)
                     skipped_count += 1
                 except Exception as e:
                     log_error(f"Generic error inserting row from {file_path.name} at line {line_num}: {e}", fields)
@@ -122,7 +122,7 @@ def import_cis_cip_bdpm(cursor: sqlite3.Cursor, file_path: Path):
 
 
                     cursor.execute("""
-                        INSERT INTO Presentations (
+                        INSERT OR REPLACE INTO Presentations (
                             code_cis, code_cip7, libelle_presentation, statut_administratif_presentation,
                             etat_commercialisation_presentation, date_declaration_commercialisation, code_cip13,
                             taux_remboursement, prix_medicament_euros, indications_remboursement
@@ -131,8 +131,8 @@ def import_cis_cip_bdpm(cursor: sqlite3.Cursor, file_path: Path):
                           etat_commerc_pres, date_decl_commerc, code_cip13,
                           taux_remboursement, prix_medicament_euros, indications_remb))
                     imported_count += 1
-                except sqlite3.IntegrityError as e:
-                    log_error(f"Integrity error (e.g., duplicate PK {fields[6]} or missing FK {fields[0]}) inserting row from {file_path.name} at line {line_num}: {e}", fields)
+                except sqlite3.IntegrityError as e: # PK conflict handled by REPLACE, this would be for FK issues
+                    log_error(f"Integrity error (e.g., missing FK {fields[0]}) inserting/replacing row from {file_path.name} at line {line_num}: {e}", fields)
                     skipped_count += 1
                 except Exception as e:
                     log_error(f"Generic error inserting row from {file_path.name} at line {line_num}: {e}", fields)
@@ -155,14 +155,57 @@ def import_cis_compo_bdpm(cursor: sqlite3.Cursor, file_path: Path):
     print(f"Importing data from {file_path.name} into Compositions table...")
     imported_count = 0
     skipped_count = 0
+    
     try:
+        # 1. Pre-scan file for relevant code_cis
+        relevant_cis_codes_in_file = set()
+        try:
+            with open(file_path, 'r', encoding='latin-1') as f_prescan:
+                for line in f_prescan:
+                    fields = line.strip().split('\t')
+                    if len(fields) > 0 and fields[0]: # Assuming code_cis is the first field and not empty
+                        relevant_cis_codes_in_file.add(fields[0])
+        except FileNotFoundError:
+            log_error(f"File not found during pre-scan: {file_path}. Cannot proceed with import for this file.")
+            return 0, 0
+        except UnicodeDecodeError as e:
+            log_error(f"Encoding error during pre-scan of {file_path.name}: {e}. Cannot proceed.")
+            return 0, 0
+        except Exception as e:
+            log_error(f"Unexpected error during pre-scan of {file_path.name}: {e}. Cannot proceed.")
+            return 0, 0
+
+        # 2. Delete existing entries for these code_cis
+        if relevant_cis_codes_in_file:
+            log_info(f"Found {len(relevant_cis_codes_in_file)} unique CIS codes in {file_path.name}. Deleting existing compositions for these CIS codes...")
+            deletions_failed_for_cis = set()
+            for cis_code in relevant_cis_codes_in_file:
+                try:
+                    cursor.execute("DELETE FROM Compositions WHERE code_cis = ?", (cis_code,))
+                except sqlite3.Error as e:
+                    log_error(f"Error deleting compositions for CIS {cis_code}: {e}")
+                    deletions_failed_for_cis.add(cis_code)
+            
+            # Only commit if deletions didn't all fail (or handle partial success if needed)
+            if len(deletions_failed_for_cis) < len(relevant_cis_codes_in_file):
+                 cursor.connection.commit() 
+                 log_info("Finished deleting old compositions for relevant CIS codes.")
+            else:
+                log_error("All deletions failed. Rolling back any potential partial deletions (though usually not needed for DELETE).")
+                cursor.connection.rollback() # Rollback if all deletions failed
+
+            if deletions_failed_for_cis:
+                log_warning(f"Could not delete compositions for {len(deletions_failed_for_cis)} CIS codes. Data for these might be duplicated or old.")
+                # Remove CIS codes for which deletion failed from the set to avoid inserting potentially duplicate data if that's a concern
+                # For now, we'll proceed to insert all, INSERT OR REPLACE will handle PKs if any were defined beyond autoincrement.
+        else:
+            log_info(f"No relevant CIS codes found in {file_path.name} during pre-scan, or file empty. Skipping deletions.")
+
+        # 3. Insert new entries
         with open(file_path, 'r', encoding='latin-1') as f:
             for line_num, line in enumerate(f, 1):
                 try:
                     fields = line.strip().split('\t')
-                    # CIS_COMPO_bdpm.txt: code_cis, designation_element_pharmaceutique, code_substance, 
-                    # denomination_substance, dosage_substance, reference_dosage, nature_composant, 
-                    # numero_liaison_sa_ft (SA_FT in some docs)
                     if len(fields) != 8:
                         log_error(f"Incorrect number of fields ({len(fields)} instead of 8) in {file_path.name} at line {line_num}.", fields)
                         skipped_count += 1
@@ -171,33 +214,33 @@ def import_cis_compo_bdpm(cursor: sqlite3.Cursor, file_path: Path):
                     (code_cis, element_pharmaceutique, code_substance, denomination_substance,
                      dosage_substance, reference_dosage, nature_composant, _ignored_sa_ft) = fields
                     
-                    if not code_cis: # Foreign Key
+                    if not code_cis:
                         log_error(f"Missing code_cis (FK) in {file_path.name} at line {line_num}. Skipping row.", fields)
                         skipped_count += 1
                         continue
 
                     cursor.execute("""
-                        INSERT INTO Compositions (
+                        INSERT OR REPLACE INTO Compositions ( 
                             code_cis, element_pharmaceutique, code_substance, denomination_substance,
                             dosage_substance, reference_dosage, nature_composant
                         ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (code_cis, element_pharmaceutique, code_substance, denomination_substance,
                           dosage_substance, reference_dosage, nature_composant))
                     imported_count += 1
-                except sqlite3.IntegrityError as e: # Should not happen with AUTOINCREMENT PK if FK is valid
-                    log_error(f"Integrity error (e.g. missing FK {fields[0]}) inserting row from {file_path.name} at line {line_num}: {e}", fields)
+                except sqlite3.IntegrityError as e: 
+                    log_error(f"Integrity error (e.g. missing FK {fields[0]}) inserting/replacing row from {file_path.name} at line {line_num}: {e}", fields)
                     skipped_count += 1
                 except Exception as e:
                     log_error(f"Generic error inserting row from {file_path.name} at line {line_num}: {e}", fields)
                     skipped_count += 1
-    except FileNotFoundError:
-        log_error(f"File not found: {file_path}. Skipping import for this file.")
-        return 0,0
+    except FileNotFoundError: # This outer try-except is now mainly for the main read pass if pre-scan somehow passed
+        log_error(f"File not found (main read pass): {file_path}. This should have been caught by pre-scan.")
+        return 0, 0
     except UnicodeDecodeError as e:
-        log_error(f"Encoding error reading {file_path.name}: {e}")
-        return 0,0
+        log_error(f"Encoding error reading {file_path.name} (main read pass): {e}")
+        return 0, 0
     except Exception as e:
-        log_error(f"Failed to process file {file_path.name}: {e}")
+        log_error(f"Failed to process file {file_path.name} (main read pass): {e}")
         return 0, 0
 
     print(f"Finished importing {file_path.name}: {imported_count} rows imported, {skipped_count} rows skipped.")
@@ -209,11 +252,52 @@ def import_cis_gener_bdpm(cursor: sqlite3.Cursor, file_path: Path):
     imported_count = 0
     skipped_count = 0
     try:
+        # 1. Pre-scan file for relevant code_cis
+        relevant_cis_codes_in_file = set()
+        try:
+            with open(file_path, 'r', encoding='latin-1') as f_prescan:
+                for line in f_prescan:
+                    fields = line.strip().split('\t')
+                    if len(fields) > 0 and fields[0]:
+                        relevant_cis_codes_in_file.add(fields[0])
+        except FileNotFoundError:
+            log_error(f"File not found during pre-scan: {file_path}. Cannot proceed.")
+            return 0, 0
+        except UnicodeDecodeError as e:
+            log_error(f"Encoding error during pre-scan of {file_path.name}: {e}. Cannot proceed.")
+            return 0, 0
+        except Exception as e:
+            log_error(f"Unexpected error during pre-scan of {file_path.name}: {e}. Cannot proceed.")
+            return 0, 0
+
+        # 2. Delete existing entries for these code_cis
+        if relevant_cis_codes_in_file:
+            log_info(f"Found {len(relevant_cis_codes_in_file)} unique CIS codes in {file_path.name}. Deleting existing generiques for these CIS codes...")
+            deletions_failed_for_cis = set()
+            for cis_code in relevant_cis_codes_in_file:
+                try:
+                    cursor.execute("DELETE FROM Generiques WHERE code_cis = ?", (cis_code,))
+                except sqlite3.Error as e:
+                    log_error(f"Error deleting generiques for CIS {cis_code}: {e}")
+                    deletions_failed_for_cis.add(cis_code)
+            
+            if len(deletions_failed_for_cis) < len(relevant_cis_codes_in_file):
+                 cursor.connection.commit()
+                 log_info("Finished deleting old generiques for relevant CIS codes.")
+            else:
+                log_error("All deletions for generiques failed. Rolling back.")
+                cursor.connection.rollback()
+
+            if deletions_failed_for_cis:
+                log_warning(f"Could not delete generiques for {len(deletions_failed_for_cis)} CIS codes.")
+        else:
+            log_info(f"No relevant CIS codes found in {file_path.name} during pre-scan. Skipping deletions.")
+
+        # 3. Insert new entries
         with open(file_path, 'r', encoding='latin-1') as f:
             for line_num, line in enumerate(f, 1):
                 try:
                     fields = line.strip().split('\t')
-                    # CIS_GENER_bdpm.txt: code_cis, libelle_groupement_generique, type_generique, numero_tri
                     if len(fields) != 4:
                         log_error(f"Incorrect number of fields ({len(fields)} instead of 4) in {file_path.name} at line {line_num}.", fields)
                         skipped_count += 1
@@ -221,44 +305,37 @@ def import_cis_gener_bdpm(cursor: sqlite3.Cursor, file_path: Path):
 
                     (code_cis, libelle_groupement, type_generique_str, numero_tri_str) = fields
                     
-                    type_generique = None
-                    try:
-                        if type_generique_str: type_generique = int(type_generique_str)
-                    except ValueError:
-                        log_error(f"Could not convert type_generique '{type_generique_str}' to int in {file_path.name} at line {line_num}.", fields)
-                        # Decide if to skip or insert with NULL based on column constraints (assuming nullable for now)
+                    type_generique = int(type_generique_str) if type_generique_str else None
+                    numero_tri = int(numero_tri_str) if numero_tri_str else None
 
-                    numero_tri = None
-                    try:
-                        if numero_tri_str: numero_tri = int(numero_tri_str)
-                    except ValueError:
-                        log_error(f"Could not convert numero_tri '{numero_tri_str}' to int in {file_path.name} at line {line_num}.", fields)
-
-                    if not code_cis: # Foreign Key
+                    if not code_cis:
                         log_error(f"Missing code_cis (FK) in {file_path.name} at line {line_num}. Skipping row.", fields)
                         skipped_count += 1
                         continue
 
                     cursor.execute("""
-                        INSERT INTO Generiques (
+                        INSERT OR REPLACE INTO Generiques (
                             code_cis, libelle_groupement_generique, type_generique, numero_tri
                         ) VALUES (?, ?, ?, ?)
                     """, (code_cis, libelle_groupement, type_generique, numero_tri))
                     imported_count += 1
+                except ValueError as e: # Catch conversion errors for int
+                    log_error(f"Data conversion error for row in {file_path.name} at line {line_num}: {e}", fields)
+                    skipped_count +=1
                 except sqlite3.IntegrityError as e:
-                    log_error(f"Integrity error (e.g. missing FK {fields[0]}) inserting row from {file_path.name} at line {line_num}: {e}", fields)
+                    log_error(f"Integrity error (e.g. missing FK {fields[0]}) inserting/replacing row from {file_path.name} at line {line_num}: {e}", fields)
                     skipped_count += 1
                 except Exception as e:
                     log_error(f"Generic error inserting row from {file_path.name} at line {line_num}: {e}", fields)
                     skipped_count += 1
     except FileNotFoundError:
-        log_error(f"File not found: {file_path}. Skipping import for this file.")
-        return 0,0
+        log_error(f"File not found (main read pass): {file_path}. This should have been caught by pre-scan.")
+        return 0, 0
     except UnicodeDecodeError as e:
-        log_error(f"Encoding error reading {file_path.name}: {e}")
-        return 0,0
+        log_error(f"Encoding error reading {file_path.name} (main read pass): {e}")
+        return 0, 0
     except Exception as e:
-        log_error(f"Failed to process file {file_path.name}: {e}")
+        log_error(f"Failed to process file {file_path.name} (main read pass): {e}")
         return 0, 0
         
     print(f"Finished importing {file_path.name}: {imported_count} rows imported, {skipped_count} rows skipped.")
@@ -270,11 +347,52 @@ def import_cis_cpd_bdpm(cursor: sqlite3.Cursor, file_path: Path):
     imported_count = 0
     skipped_count = 0
     try:
+        # 1. Pre-scan file for relevant code_cis
+        relevant_cis_codes_in_file = set()
+        try:
+            with open(file_path, 'r', encoding='latin-1') as f_prescan:
+                for line in f_prescan:
+                    fields = line.strip().split('\t')
+                    if len(fields) > 0 and fields[0]:
+                        relevant_cis_codes_in_file.add(fields[0])
+        except FileNotFoundError:
+            log_error(f"File not found during pre-scan: {file_path}. Cannot proceed.")
+            return 0, 0
+        except UnicodeDecodeError as e:
+            log_error(f"Encoding error during pre-scan of {file_path.name}: {e}. Cannot proceed.")
+            return 0, 0
+        except Exception as e:
+            log_error(f"Unexpected error during pre-scan of {file_path.name}: {e}. Cannot proceed.")
+            return 0, 0
+
+        # 2. Delete existing entries for these code_cis
+        if relevant_cis_codes_in_file:
+            log_info(f"Found {len(relevant_cis_codes_in_file)} unique CIS codes in {file_path.name}. Deleting existing conditions for these CIS codes...")
+            deletions_failed_for_cis = set()
+            for cis_code in relevant_cis_codes_in_file:
+                try:
+                    cursor.execute("DELETE FROM ConditionsPrescriptionDelivrance WHERE code_cis = ?", (cis_code,))
+                except sqlite3.Error as e:
+                    log_error(f"Error deleting conditions for CIS {cis_code}: {e}")
+                    deletions_failed_for_cis.add(cis_code)
+            
+            if len(deletions_failed_for_cis) < len(relevant_cis_codes_in_file):
+                 cursor.connection.commit()
+                 log_info("Finished deleting old conditions for relevant CIS codes.")
+            else:
+                log_error("All deletions for conditions failed. Rolling back.")
+                cursor.connection.rollback()
+
+            if deletions_failed_for_cis:
+                log_warning(f"Could not delete conditions for {len(deletions_failed_for_cis)} CIS codes.")
+        else:
+            log_info(f"No relevant CIS codes found in {file_path.name} during pre-scan. Skipping deletions.")
+
+        # 3. Insert new entries
         with open(file_path, 'r', encoding='latin-1') as f:
             for line_num, line in enumerate(f, 1):
                 try:
                     fields = line.strip().split('\t')
-                    # CIS_CPD_bdpm.txt: code_cis, condition
                     if len(fields) != 2:
                         log_error(f"Incorrect number of fields ({len(fields)} instead of 2) in {file_path.name} at line {line_num}.", fields)
                         skipped_count += 1
@@ -282,30 +400,30 @@ def import_cis_cpd_bdpm(cursor: sqlite3.Cursor, file_path: Path):
                     
                     (code_cis, condition) = fields
 
-                    if not code_cis: # Foreign Key
+                    if not code_cis:
                         log_error(f"Missing code_cis (FK) in {file_path.name} at line {line_num}. Skipping row.", fields)
                         skipped_count += 1
                         continue
 
                     cursor.execute("""
-                        INSERT INTO ConditionsPrescriptionDelivrance (code_cis, condition) 
+                        INSERT OR REPLACE INTO ConditionsPrescriptionDelivrance (code_cis, condition) 
                         VALUES (?, ?)
                     """, (code_cis, condition))
                     imported_count += 1
                 except sqlite3.IntegrityError as e:
-                    log_error(f"Integrity error (e.g. missing FK {fields[0]}) inserting row from {file_path.name} at line {line_num}: {e}", fields)
+                    log_error(f"Integrity error (e.g. missing FK {fields[0]}) inserting/replacing row from {file_path.name} at line {line_num}: {e}", fields)
                     skipped_count += 1
                 except Exception as e:
                     log_error(f"Generic error inserting row from {file_path.name} at line {line_num}: {e}", fields)
                     skipped_count += 1
     except FileNotFoundError:
-        log_error(f"File not found: {file_path}. Skipping import for this file.")
-        return 0,0
+        log_error(f"File not found (main read pass): {file_path}. This should have been caught by pre-scan.")
+        return 0, 0
     except UnicodeDecodeError as e:
-        log_error(f"Encoding error reading {file_path.name}: {e}")
-        return 0,0
+        log_error(f"Encoding error reading {file_path.name} (main read pass): {e}")
+        return 0, 0
     except Exception as e:
-        log_error(f"Failed to process file {file_path.name}: {e}")
+        log_error(f"Failed to process file {file_path.name} (main read pass): {e}")
         return 0, 0
 
     print(f"Finished importing {file_path.name}: {imported_count} rows imported, {skipped_count} rows skipped.")

@@ -1,0 +1,23 @@
+{% extends "layout.html" %}
+
+{% block title %}Database Update Status - {{ super() }}{% endblock %}
+
+{% block content %}
+    <h2>Database Update Status</h2>
+
+    {% if overall_success %}
+        <div class="alert alert-info">Database update process completed successfully.</div>
+    {% else %}
+        <div class="alert alert-danger">Database update process completed with one or more errors. Please review the output below.</div>
+    {% endif %}
+
+    <h3>Script Execution Output:</h3>
+    <pre style="background-color: #f5f5f5; border: 1px solid #ccc; padding: 10px; max-height: 600px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word;">
+        {{ script_output | safe }}
+    </pre>
+    
+    <p>
+        <a href="{{ url_for('trigger_update') }}">Back to Update Page</a> | 
+        <a href="{{ url_for('medicament_list') }}">Back to Medicament List</a>
+    </p>
+{% endblock %}
