@@ -1,0 +1,75 @@
+{% extends "layout.html" %}
+
+{% block title %}Medicament List - {{ super() }}{% endblock %}
+
+{% block content %}
+    <h2>List of Medicaments</h2>
+
+    <form method="get" action="{{ url_for('medicament_list') }}">
+        <label for="name_filter">Name:</label>
+        <input type="text" id="name_filter" name="name_filter" value="{{ request.args.get('name_filter', '') }}">
+        
+        <label for="substance_filter">Substance:</label>
+        <input type="text" id="substance_filter" name="substance_filter" value="{{ request.args.get('substance_filter', '') }}">
+        
+        <button type="submit">Filter</button>
+        <a href="{{ url_for('medicament_list') }}">Clear Filters</a> {# Added a clear filters link #}
+    </form>
+    <br>
+
+    <table>
+        <thead>
+            <tr>
+                <th>CIS Code</th>
+                <th>Denomination</th>
+                <th>Pharmaceutical Form</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% if medicaments %}
+                {% for med in medicaments %}
+                <tr>
+                    <td>{{ med.code_cis }}</td>
+                    <td><a href="{{ url_for('medicament_detail', code_cis=med.code_cis) }}">{{ med.denomination }}</a></td>
+                    <td>{{ med.forme_pharmaceutique }}</td>
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr>
+                    <td colspan="3">No medicaments found.</td>
+                </tr>
+            {% endif %}
+        </tbody>
+    </table>
+
+    <div class="pagination">
+        {% if total_pages > 1 %}
+            {# Build query parameters for pagination, including current filters #}
+            {% set query_params = {} %}
+            {% if current_filters.name %}{% set _ = query_params.update({'name_filter': current_filters.name}) %}{% endif %}
+            {% if current_filters.substance %}{% set _ = query_params.update({'substance_filter': current_filters.substance}) %}{% endif %}
+
+            {% if page > 1 %}
+                <a href="{{ url_for('medicament_list', page=page-1, **query_params) }}">Previous</a>
+            {% endif %}
+
+            {# Page numbers - simplified for brevity, could be more complex #}
+            {% for p_num in range(1, total_pages + 1) %}
+                {% if p_num == page %}
+                    <a href="{{ url_for('medicament_list', page=p_num, **query_params) }}" class="active">{{ p_num }}</a>
+                {% else %}
+                    {# Show only a few page numbers around current page for large total_pages #}
+                    {% if p_num - page < 3 and page - p_num < 3 or p_num == 1 or p_num == total_pages %}
+                         <a href="{{ url_for('medicament_list', page=p_num, **query_params) }}">{{ p_num }}</a>
+                    {% elif (p_num - page == 3 and p_num < total_pages -1 ) or (page - p_num == 3 and p_num > 2) %}
+                        <span>...</span>
+                    {% endif %}
+                {% endif %}
+            {% endfor %}
+
+            {% if page < total_pages %}
+                <a href="{{ url_for('medicament_list', page=page+1, **query_params) }}">Next</a>
+            {% endif %}
+        {% endif %}
+    </div>
+{% endblock %}

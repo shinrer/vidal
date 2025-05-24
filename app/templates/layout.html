@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>{% block title %}French Medicines Database{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- Inline styles removed, will be handled by style.css -->
+</head>
+<body>
+    <header>
+        <h1><a href="{{ url_for('medicament_list') }}" style="color: #fff; text-decoration: none;">French Medicines Database</a></h1>
+        <nav>
+            <form method="get" action="{{ url_for('search_results') }}" style="display: inline; margin-right: 10px;">
+                <input type="text" name="query" placeholder="Search medications..." value="{{ request.args.get('query', '') }}">
+                <button type="submit">Search</button>
+            </form>
+            <a href="{{ url_for('update_database_placeholder') }}" style="color: #fff; text-decoration: underline;">Update Database</a>
+            <!-- Add more navigation links here if needed -->
+        </nav>
+    </header>
+    <div class="container">
+        <div class="content">
+            {% block content %}{% endblock %}
+        </div>
+    </div>
+</body>
+</html>

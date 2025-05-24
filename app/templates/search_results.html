@@ -1,0 +1,62 @@
+{% extends "layout.html" %}
+
+{% block title %}Search Results for "{{ query }}" - {{ super() }}{% endblock %}
+
+{% block content %}
+    <h2>Search Results for "{{ query }}"</h2>
+
+    {% if error_message %}
+        <p style="color: red;">{{ error_message }}</p>
+    {% endif %}
+
+    {% if medicaments %}
+    <table>
+        <thead>
+            <tr>
+                <th>CIS Code</th>
+                <th>Denomination</th>
+                <th>Pharmaceutical Form</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for med in medicaments %}
+            <tr>
+                <td>{{ med.code_cis }}</td>
+                <td><a href="{{ url_for('medicament_detail', code_cis=med.code_cis) }}">{{ med.denomination }}</a></td>
+                <td>{{ med.forme_pharmaceutique }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="pagination">
+        {% if total_pages > 1 %}
+            {# Pagination links should preserve the search query #}
+            {% if page > 1 %}
+                <a href="{{ url_for('search_results', query=query, page=page-1) }}">Previous</a>
+            {% endif %}
+
+            {# Page numbers - simplified for brevity #}
+            {% for p_num in range(1, total_pages + 1) %}
+                {% if p_num == page %}
+                    <a href="{{ url_for('search_results', query=query, page=p_num) }}" class="active">{{ p_num }}</a>
+                {% else %}
+                     {% if p_num - page < 3 and page - p_num < 3 or p_num == 1 or p_num == total_pages %}
+                        <a href="{{ url_for('search_results', query=query, page=p_num) }}">{{ p_num }}</a>
+                    {% elif (p_num - page == 3 and p_num < total_pages -1 ) or (page - p_num == 3 and p_num > 2) %}
+                        <span>...</span>
+                    {% endif %}
+                {% endif %}
+            {% endfor %}
+
+            {% if page < total_pages %}
+                <a href="{{ url_for('search_results', query=query, page=page+1) }}">Next</a>
+            {% endif %}
+        {% endif %}
+    </div>
+    {% elif not error_message %} 
+        <p>No results found for "{{ query }}".</p>
+    {% endif %}
+
+    <p><a href="{{ url_for('medicament_list') }}">Back to full list</a></p>
+{% endblock %}

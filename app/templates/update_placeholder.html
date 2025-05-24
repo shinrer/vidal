@@ -1,0 +1,16 @@
+{% extends "layout.html" %}
+
+{% block title %}Update Database - {{ super() }}{% endblock %}
+
+{% block content %}
+    <h2>Database Update</h2>
+    <p>This section will be used to trigger the process of updating the local drug database with the latest information from the source.</p>
+    <p>This involves re-running the data acquisition and import scripts:</p>
+    <ul>
+        <li><code>download_bdpm.py</code> (including manual download of the ZIP file)</li>
+        <li><code>import_structured_data.py</code></li>
+        <li><code>crawl_rcp.py</code> (which can take a very long time)</li>
+    </ul>
+    <p><em>(Full automation and UI integration for this process, including progress feedback, are planned for Part 3: Maintenance and Database Update.)</em></p>
+    <p><a href="{{ url_for('medicament_list') }}">Back to Medicament List</a></p>
+{% endblock %}

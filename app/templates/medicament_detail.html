@@ -1,0 +1,125 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ medicament.details.denomination if medicament else 'Medicament Detail' }} - {{ super() }}{% endblock %}
+
+{% block content %}
+    {% if medicament and medicament.details %}
+        <h2>{{ medicament.details.denomination }}</h2>
+        <p><small>CIS Code: {{ medicament.details.code_cis }}</small></p>
+
+        <div class="detail-section">
+            <h3>Medicament Details</h3>
+            <p><strong>Pharmaceutical Form:</strong> {{ medicament.details.forme_pharmaceutique }}</p>
+            <p><strong>Routes of Administration:</strong> {{ medicament.details.voies_administration }}</p>
+            <p><strong>Administrative Status:</strong> {{ medicament.details.statut_administratif }}</p>
+            <p><strong>Marketing Authorization Type:</strong> {{ medicament.details.type_procedure_amm }}</p>
+            <p><strong>Commercialization Status:</strong> {{ medicament.details.etat_commercialisation }}</p>
+            <p><strong>Marketing Authorization Date:</strong> {{ medicament.details.date_amm }}</p>
+            {% if medicament.details.titulaires %}
+                <p><strong>Holder(s):</strong> {{ medicament.details.titulaires }}</p>
+            {% endif %}
+            {% if medicament.details.surveillance_renforcee %}
+                 <p><strong>Enhanced Surveillance:</strong> {{ medicament.details.surveillance_renforcee }}</p>
+            {% endif %}
+        </div>
+
+        {% if medicament.presentations %}
+        <div class="detail-section">
+            <h3>Presentations</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>CIP13</th>
+                        <th>Label</th>
+                        <th>Commercialization Status</th>
+                        <th>Price (€)</th>
+                        <th>Reimbursement Rate</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for pres in medicament.presentations %}
+                    <tr>
+                        <td>{{ pres.code_cip13 }}</td>
+                        <td>{{ pres.libelle_presentation }}</td>
+                        <td>{{ pres.etat_commercialisation_presentation }}</td>
+                        <td>{{ "%.2f"|format(pres.prix_medicament_euros) if pres.prix_medicament_euros is not none else 'N/A' }}</td>
+                        <td>{{ pres.taux_remboursement if pres.taux_remboursement else 'N/A' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        {% if medicament.compositions %}
+        <div class="detail-section">
+            <h3>Composition (Active Substances)</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Substance</th>
+                        <th>Dosage</th>
+                        <th>Pharmaceutical Element</th>
+                        <th>Nature of Component</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for comp in medicament.compositions %}
+                    <tr>
+                        <td>{{ comp.denomination_substance }}</td>
+                        <td>{{ comp.dosage_substance }}</td>
+                        <td>{{ comp.element_pharmaceutique }}</td>
+                        <td>{{ comp.nature_composant }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+        
+        {% if medicament.generiques %}
+        <div class="detail-section">
+            <h3>Generic Group Information</h3>
+            {% for gen in medicament.generiques %}
+                <p><strong>Group Label:</strong> {{ gen.libelle_groupement_generique }}</p>
+                <p><strong>Type:</strong> 
+                    {% if gen.type_generique == 1 %}Princeps
+                    {% elif gen.type_generique == 2 %}Générique
+                    {% elif gen.type_generique == 3 %}Générique par complémentarité hospitalière
+                    {% elif gen.type_generique == 4 %}Générique substituable
+                    {% else %}N/A ({{ gen.type_generique }})
+                    {% endif %}
+                </p>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if medicament.conditions %}
+        <div class="detail-section">
+            <h3>Conditions for Prescription and Delivery</h3>
+            <ul>
+                {% for cond in medicament.conditions %}
+                <li>{{ cond.condition }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if medicament.rcp and medicament.rcp.texte_rcp %}
+        <div class="detail-section">
+            <h3>Résumé des Caractéristiques du Produit (RCP)</h3>
+            <p><small>Last extracted: {{ medicament.rcp.date_derniere_extraction_rcp if medicament.rcp.date_derniere_extraction_rcp else 'N/A' }}</small></p>
+            <pre>{{ medicament.rcp.texte_rcp }}</pre>
+        </div>
+        {% else %}
+        <div class="detail-section">
+            <h3>Résumé des Caractéristiques du Produit (RCP)</h3>
+            <p>RCP text not available for this medicament.</p>
+        </div>
+        {% endif %}
+
+    {% else %}
+        <p>Medicament details not found.</p>
+    {% endif %}
+    <p><a href="{{ url_for('medicament_list') }}">Back to list</a></p>
+{% endblock %}

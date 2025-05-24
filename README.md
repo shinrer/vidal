@@ -239,3 +239,55 @@ The `medicaments.db` SQLite database stores the imported and crawled data. Key t
     *   **Key Fields**: `id_cpd` (Primary Key), `code_cis` (Foreign Key to `Medicaments`), `condition`.
 
 The `.gitignore` file is configured to ignore `*.db` files, so `medicaments.db` will not be committed to the repository. You will need to generate it locally by running the scripts.
+
+# Part 2: Local Web Interface
+
+This section describes the Flask web application that provides a user interface to browse and search the medication data stored in `medicaments.db`.
+
+## Prerequisites
+
+*   **Python**: Ensure Python (version 3.6 or higher) is installed.
+*   **Libraries**: All libraries listed in `requirements.txt` (primarily `Flask`) and those used in Part 1 are needed.
+*   **Data**: The `medicaments.db` database file must exist in the project root and should be populated by running the scripts from Part 1. If the database is not populated, the web application will run but may show no data or errors when trying to access data.
+
+To install the necessary Python dependencies for the web application, run:
+```bash
+pip install -r requirements.txt
+```
+
+## Running the Web Application
+
+To start the Flask development server:
+
+1.  Ensure your current directory is the project root.
+2.  Run the application using:
+    ```bash
+    python run.py
+    ```
+3.  The application will typically be accessible at `http://127.0.0.1:5000/` in your web browser. The server runs in debug mode, which provides helpful error messages during development and automatically reloads changes.
+
+## Features
+
+The web interface provides the following functionalities:
+
+*   **Medication List (`/medicaments`)**:
+    *   Displays a paginated list of all medications from the database.
+    *   Allows filtering the list by medication name (denomination) and/or by active substance.
+*   **Medication Detail (`/medicament/<code_cis>`)**:
+    *   Shows detailed information for a selected medication, identified by its `code_cis`.
+    *   This includes:
+        *   General medication attributes (pharmaceutical form, administration routes, etc.).
+        *   A list of its commercial presentations (CIP code, price, reimbursement rate).
+        *   Its composition (active substances and dosages).
+        *   Information on generic groupings, if applicable.
+        *   Conditions for prescription and delivery.
+        *   The full text of the "Résumé des Caractéristiques du Produit" (RCP), if available.
+*   **Keyword Search**:
+    *   A search bar in the header allows users to search for medications by keywords.
+    *   The search queries across medication denomination, active substance names, and presentation labels.
+    *   Search results are displayed on a separate, paginated page.
+*   **Database Update Placeholder (`/update-db-placeholder`)**:
+    *   A placeholder page accessible via a link in the header.
+    *   This page outlines the future functionality for triggering updates to the local database by re-running the data acquisition and processing scripts. Full implementation of this update mechanism is planned for a later project part.
+
+The application is styled using a custom CSS file (`app/static/style.css`) for a clean and user-friendly experience.

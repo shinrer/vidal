@@ -1,0 +1,232 @@
+/* General Body Styles */
+body {
+    font-family: sans-serif;
+    margin: 0; /* Changed from 20px to 0 as container will handle main content margin */
+    padding: 0;
+    line-height: 1.6;
+    background-color: #f4f4f4;
+    color: #333;
+}
+
+/* Container for main content */
+.container {
+    width: 85%; /* Adjusted width slightly */
+    margin: 20px auto; /* Added top/bottom margin */
+    overflow: hidden;
+    background-color: #fff;
+    padding: 20px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    border-radius: 5px; /* Added slight rounding */
+}
+
+/* Header and Navigation */
+header {
+    background-color: #2c3e50; /* Dark blue-gray */
+    color: #ecf0f1; /* Light gray */
+    padding: 1rem 0;
+    margin-bottom: 20px;
+    text-align: center;
+    border-bottom: 3px solid #3498db; /* Blue accent */
+}
+
+header h1 a { /* Targeting the h1 a specifically */
+    color: #ecf0f1;
+    text-decoration: none;
+    font-size: 1.8em;
+}
+header h1 a:hover {
+    color: #3498db; /* Blue on hover */
+}
+
+header nav {
+    margin-top: 10px;
+}
+
+header nav a { /* For navigation links like "Update Database" */
+    color: #ecf0f1;
+    margin: 0 15px;
+    text-decoration: none;
+    font-size: 1em;
+}
+header nav a:hover {
+    text-decoration: underline;
+    color: #3498db; /* Blue on hover */
+}
+
+/* Search form in header */
+header nav form {
+    display: inline-block; /* Keep form on the same line */
+    margin: 0 10px;
+}
+header nav input[type="text"] {
+    padding: 8px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    font-size: 0.9em;
+}
+header nav button, header nav input[type="submit"] {
+    padding: 8px 12px;
+    background-color: #3498db; /* Blue */
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+}
+header nav button:hover, header nav input[type="submit"]:hover {
+    background-color: #2980b9; /* Darker blue */
+}
+
+
+/* Tables */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+}
+th, td {
+    border: 1px solid #ddd;
+    padding: 10px; /* Increased padding slightly */
+    text-align: left;
+}
+th {
+    background-color: #e9ecef; /* Lighter gray for headers */
+    font-weight: bold;
+}
+tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+tr:hover {
+    background-color: #f1f1f1; /* Slight hover effect for rows */
+}
+
+/* Forms (general, for filters etc. in content area) */
+form {
+    margin-bottom: 20px;
+}
+form label {
+    margin-right: 5px;
+    font-weight: bold;
+}
+form input[type="text"], 
+form input[type="submit"], 
+form button {
+    padding: 8px;
+    margin-right: 10px; /* Spacing between form elements */
+    margin-bottom: 10px; /* Spacing for elements that wrap */
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    font-size: 0.95em;
+}
+form button, form input[type="submit"] {
+    background-color: #5cb85c; /* Green for primary actions */
+    color: white;
+    cursor: pointer;
+    border: none; /* Remove border for button consistency */
+}
+form button:hover, form input[type="submit"]:hover {
+    background-color: #4cae4c;
+}
+form a.button-link, /* For 'Clear Filters' styled as a button */
+.button-link { 
+    display: inline-block;
+    padding: 8px 12px;
+    margin-right: 10px;
+    margin-bottom: 10px;
+    background-color: #777;
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+    font-size: 0.95em;
+}
+form a.button-link:hover,
+.button-link:hover {
+    background-color: #555;
+    color: white; /* Ensure text color remains white on hover */
+}
+
+
+/* Links (general content links) */
+a {
+    color: #007bff; /* Standard blue link color */
+    text-decoration: none;
+}
+a:hover {
+    text-decoration: underline;
+    color: #0056b3; /* Darker blue on hover */
+}
+
+/* Pagination */
+.pagination {
+    margin: 20px 0;
+    text-align: center;
+}
+.pagination a {
+    margin: 0 5px;
+    text-decoration: none;
+    padding: 8px 12px; /* Made pagination buttons a bit larger */
+    border: 1px solid #ddd;
+    color: #007bff;
+    border-radius: 4px;
+}
+.pagination a.active {
+    background-color: #007bff;
+    color: white;
+    border-color: #007bff;
+}
+.pagination a:hover:not(.active) {
+    background-color: #f0f0f0;
+}
+.pagination span { /* For '...' in pagination */
+    padding: 8px 12px;
+    margin: 0 5px;
+}
+
+
+/* Detail Page Specifics */
+.detail-section {
+    margin-bottom: 25px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #eee;
+}
+.detail-section:last-child {
+    border-bottom: none;
+}
+.detail-section h3 {
+    color: #333;
+    margin-top: 0; /* Remove default top margin for h3 */
+}
+pre { /* For RCP text */
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    background-color: #f9f9f9;
+    padding: 15px;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    font-size: 0.9em;
+    max-height: 400px; /* Limit height and make it scrollable */
+    overflow-y: auto;
+}
+
+/* Utility classes */
+.alert {
+    padding: 15px;
+    margin-bottom: 20px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+}
+.alert-info {
+    color: #31708f;
+    background-color: #d9edf7;
+    border-color: #bce8f1;
+}
+.alert-danger { /* For error messages */
+    color: #a94442;
+    background-color: #f2dede;
+    border-color: #ebccd1;
+}
+
+/* Ensure content div within container takes up space */
+.content {
+    padding: 0; /* Removed default padding as container now has padding */
+}
