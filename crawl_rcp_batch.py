@@ -14,6 +14,7 @@ def log_error(message: str):
 
 # --- Constants ---
 DEFAULT_CODES_FILE = Path("unique_cis_codes.json")
+OUTPUT_DIR = Path("JSONs")
 
 
 def load_cis_codes(path: Path) -> list[str]:
@@ -28,13 +29,14 @@ def load_cis_codes(path: Path) -> list[str]:
 
 
 def process_codes(codes: list[str]):
+    OUTPUT_DIR.mkdir(exist_ok=True)
     total = len(codes)
     for idx, code in enumerate(codes, start=1):
         log_info(f"[{idx}/{total}] Processing CIS {code}")
         try:
             data = get_drug_info_from_cis(code)
             if data:
-                filename = f"rcp_cis_{code}.json"
+                filename = OUTPUT_DIR / f"rcp_cis_{code}.json"
                 save_to_json(data, filename)
             else:
                 log_error(f"No data returned for CIS {code}")
