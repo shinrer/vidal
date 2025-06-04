@@ -14,6 +14,10 @@ def log_error(message: str):
 
 # --- Constants ---
 DEFAULT_CODES_FILE = Path("unique_cis_codes.json")
+ 5yn93z-codex/add-script-to-crawl-rcp-data-by-cis-code
+OUTPUT_DIR = Path("JSONs")
+
+ main
 
 
 def load_cis_codes(path: Path) -> list[str]:
@@ -28,13 +32,19 @@ def load_cis_codes(path: Path) -> list[str]:
 
 
 def process_codes(codes: list[str]):
+ 5yn93z-codex/add-script-to-crawl-rcp-data-by-cis-code
+    OUTPUT_DIR.mkdir(exist_ok=True)
+ main
     total = len(codes)
     for idx, code in enumerate(codes, start=1):
         log_info(f"[{idx}/{total}] Processing CIS {code}")
         try:
             data = get_drug_info_from_cis(code)
             if data:
+              5yn93z-codex/add-script-to-crawl-rcp-data-by-cis-code
+                filename = OUTPUT_DIR / f"rcp_cis_{code}.json"
                 filename = f"rcp_cis_{code}.json"
+   main
                 save_to_json(data, filename)
             else:
                 log_error(f"No data returned for CIS {code}")
