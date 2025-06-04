@@ -1,18 +1,18 @@
+# --- Fichier : database_setup.py ---
 import sqlite3
 
 DATABASE_NAME = "medicaments.db"
 
 def create_tables():
-    """
-    Connects to (or creates if not existing) a SQLite database file 
-    named medicaments.db and creates the necessary tables.
-    """
-    conn = None  # Initialize conn to None
+    conn = None
     try:
         conn = sqlite3.connect(DATABASE_NAME)
         cursor = conn.cursor()
 
-        # Table: Medicaments (Based on CIS_bdpm.txt)
+        # Activer la vérification des clés étrangères pour cette connexion
+        cursor.execute("PRAGMA foreign_keys = ON;")
+
+        # Table: Medicaments
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS Medicaments (
             code_cis TEXT PRIMARY KEY,
@@ -30,7 +30,7 @@ def create_tables():
         )
         """)
 
-        # Table: Presentations (Based on CIS_CIP_bdpm.txt)
+        # Table: Presentations
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS Presentations (
             code_cip7 TEXT,
@@ -43,14 +43,10 @@ def create_tables():
             prix_medicament_euros REAL,
             taux_remboursement TEXT,
             indications_remboursement TEXT,
-            FOREIGN KEY(code_cis) REFERENCES Medicaments(code_cis)
+            FOREIGN KEY(code_cis) REFERENCES Medicaments(code_cis) ON DELETE CASCADE
         )
         """)
-
-        # Table: Compositions (Based on CIS_COMPO_bdpm.txt)
-        # Note: This table structure assumes one row per component.
-        # The source file has one row per CIS with components listed horizontally.
-        # Data loading will need to handle this transformation.
+        # Table: Compositions
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS Compositions (
             id_composition INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,29 +57,10 @@ def create_tables():
             dosage_substance TEXT,
             reference_dosage TEXT,
             nature_composant TEXT,
-            FOREIGN KEY(code_cis) REFERENCES Medicaments(code_cis)
+            FOREIGN KEY(code_cis) REFERENCES Medicaments(code_cis) ON DELETE CASCADE
         )
         """)
-
-        # Table: RCPs (Resumes des Caracteristiques du Produit)
-        # This table is intended to store links or references to RCP documents,
-        # or potentially the full text if manageable. The actual source/format of RCP data
-        # from BDPM needs to be clarified for data loading. For now, a placeholder structure.
-        # Assuming one RCP per CIS.
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS RCPs (
-            code_cis TEXT PRIMARY KEY,
-            texte_rcp TEXT, 
-            date_derniere_extraction_rcp TEXT,
-            FOREIGN KEY(code_cis) REFERENCES Medicaments(code_cis)
-        )
-        """)
-        # The actual BDPM does not directly provide RCP texts in a simple downloadable file.
-        # RCPs are typically accessed via ANSM or EMA websites.
-        # This table might store links or summaries if available through other BDPM files or related data sources.
-        # For the scope of current BDPM text files, this table might remain unpopulated or store references from other files if found.
-
-        # Table: Generiques (Based on CIS_GENER_bdpm.txt)
+        # Table: Generiques
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS Generiques (
             id_generique INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,38 +68,56 @@ def create_tables():
             libelle_groupement_generique TEXT,
             type_generique INTEGER,
             numero_tri INTEGER,
-            FOREIGN KEY(code_cis) REFERENCES Medicaments(code_cis)
+            FOREIGN KEY(code_cis) REFERENCES Medicaments(code_cis) ON DELETE CASCADE
         )
         """)
-
-        # Table: ConditionsPrescriptionDelivrance (Based on CIS_CPD_bdpm.txt)
+        # Table: ConditionsPrescriptionDelivrance
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS ConditionsPrescriptionDelivrance (
             id_cpd INTEGER PRIMARY KEY AUTOINCREMENT,
             code_cis TEXT,
             condition TEXT,
-            FOREIGN KEY(code_cis) REFERENCES Medicaments(code_cis)
+            FOREIGN KEY(code_cis) REFERENCES Medicaments(code_cis) ON DELETE CASCADE
         )
         """)
 
+        # Table: RCPs (Resumes des Caracteristiques du Produit)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS RCPs (
+            code_cis TEXT PRIMARY KEY,
+            texte_rcp TEXT,
+            date_derniere_extraction_rcp TEXT,
+            FOREIGN KEY(code_cis) REFERENCES Medicaments(code_cis) ON DELETE CASCADE
+        )
+        """)
+
+        # Table: RCP_Sections (Sections normalisées des RCPs pour l'IA)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS RCP_Sections (
+            id_section INTEGER PRIMARY KEY AUTOINCREMENT,
+            code_cis TEXT NOT NULL,
+            nom_section_normalise TEXT NOT NULL, -- Ex: "indications", "posologie", "effets_indesirables"
+            titre_section_original TEXT,        -- Le titre tel qu'extrait du RCP
+            texte_section TEXT NOT NULL,        -- Le contenu textuel de la section
+            ordre_apparition INTEGER,           -- Pour potentiellement reconstituer l'ordre
+            embedding BLOB,                     -- Stockage du vecteur d'embedding
+            date_segmentation TEXT NOT NULL,
+            FOREIGN KEY(code_cis) REFERENCES RCPs(code_cis) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rcp_sections_code_cis ON RCP_Sections(code_cis);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rcp_sections_nom_normalise ON RCP_Sections(nom_section_normalise);")
+        # Index sur la colonne embedding n'est pas utile pour SQLite pour la recherche de similarité.
+        # Il sera utilisé par des bibliothèques externes comme FAISS.
+
         conn.commit()
-        print(f"Database '{DATABASE_NAME}' created/updated successfully with tables.")
+        print(f"Database '{DATABASE_NAME}' created/updated successfully with tables. Foreign key checks are ON for this session during creation.")
 
     except sqlite3.Error as e:
         print(f"An error occurred: {e}")
     finally:
         if conn:
             conn.close()
-
-# Note on other BDPM files not implemented in this iteration:
-# The BDPM dataset contains several other files that could be incorporated into this database.
-# For future consideration, these include:
-# - CIS_InfoImportantes_bdpm.txt: Information and alerts about specific drugs.
-# - CIS_VALSIL_bdpm.txt: Information on marketing authorization validity.
-# - CIS_HAS_SMR_bdpm.txt: Service Médical Rendu (SMR) evaluations by HAS.
-# - CIS_HAS_ASMR_bdpm.txt: Amélioration du Service Médical Rendu (ASMR) evaluations by HAS.
-# These files provide valuable clinical and regulatory information and could be added as new tables
-# or by extending existing ones, depending on their content and relationships.
 
 if __name__ == "__main__":
     create_tables()
