@@ -44,6 +44,10 @@ PREDEFINED_COLUMNS_STRUCTURE = {
     "dosimetrie": "TEXT",
     "instructions_pour_la_preparation_des_radiopharmaceutiques": "TEXT",
     "conditions_de_prescription_et_de_delivrance": "TEXT"
+    ,"col_donnees_cliniques": "TEXT"
+    ,"col_proprietes_pharmacologiques": "TEXT"
+    ,"col_donnees_pharmaceutiques": "TEXT"
+    ,"col_informations_complementaires": "TEXT"
 }
 OTHER_SECTIONS_COL_NAME = "other_parsed_sections_json"
 IGNORE_SECTION_MARKER = "_IGNORE_THIS_SECTION_" 
@@ -130,11 +134,11 @@ def initialize_target_title_map():
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Instructions pour la préparation des radiopharmaceutiques")] = "instructions_pour_la_preparation_des_radiopharmaceutiques"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Conditions de prescription et de délivrance")] = "conditions_de_prescription_et_de_delivrance"
 
-    # Titres de section de haut niveau à ignorer (car leurs sous-sections sont mappées)
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données cliniques")] = IGNORE_SECTION_MARKER
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Propriétés pharmacologiques")] = IGNORE_SECTION_MARKER
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données pharmaceutiques")] = IGNORE_SECTION_MARKER
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Informations complementaires")] = IGNORE_SECTION_MARKER # Au cas où
+    # Titres de section de haut niveau 
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données cliniques")] = "col_donnees_cliniques"
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Propriétés pharmacologiques")] = "col_proprietes_pharmacologiques"
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données pharmaceutiques")] = "col_donnees_pharmaceutiques"
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Informations complementaires")] = "col_informations_complementaires"
     
     # Autres titres à ignorer spécifiquement
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Retour en haut de la page")] = IGNORE_SECTION_MARKER
@@ -292,9 +296,13 @@ def process_rcp_with_segmentation_logic(cis_code: str, rcp_text: str, source_fil
         cleaned_title = clean_title_for_mapping(title_for_logic_mapping, debug_cis_code=cis_code if is_debug_cis_active_here else None)
         
         if is_debug_cis_active_here:
-             log_entry = (f"    - Ordre {ordre}: Titre Regex='{original_title_from_regex.replace('\n',' ')}' "
-                          f"-> Titre Logic='{title_for_logic_mapping.replace('\n',' ')}' "
-                          f"-> Cleaned='{cleaned_title}'")
+            orig_title_single_line = original_title_from_regex.replace("\n", " ")
+            logic_title_single_line = title_for_logic_mapping.replace("\n", " ")
+            log_entry = (
+                f"    - Ordre {ordre}: Titre Regex='{orig_title_single_line}' "
+                f"-> Titre Logic='{logic_title_single_line}' "
+                f"-> Cleaned='{cleaned_title}'"
+            )
              
         db_column_name = TARGET_TITLE_TO_DB_COLUMN_MAP.get(cleaned_title)
 
@@ -307,7 +315,11 @@ def process_rcp_with_segmentation_logic(cis_code: str, rcp_text: str, source_fil
             if db_entry.get(db_column_name) is None:
                 db_entry[db_column_name] = texte_section
             else: 
-                db_entry[db_column_name] += f"\n\n--- Autre section pour même titre '{cleaned_title}' (Original Regex: {original_title_from_regex.replace('\n',' ')}) ---\n" + texte_section
+                orig_regex_single_line = original_title_from_regex.replace("\n", " ")
+                db_entry[db_column_name] += (
+                    f"\n\n--- Autre section pour même titre '{cleaned_title}' "
+                    f"(Original Regex: {orig_regex_single_line}) ---\n" + texte_section
+                )
             if is_debug_cis_active_here: 
                 processed_section_titles_for_debug.append(log_entry + f" -> MAPPED TO: {db_column_name}")
 
@@ -366,8 +378,9 @@ def process_rcp_with_segmentation_logic(cis_code: str, rcp_text: str, source_fil
         for col, val in zip(columns_to_insert, values_to_insert):
             if col == OTHER_SECTIONS_COL_NAME and other_sections_content:
                  print(f"    {col}: (Contient {len(other_sections_content)} sections, voir JSON complet si généré)")
-            elif val is not None: 
-                print(f"    {col}: '{str(val)[:100].replace('\n',' ')}...'")
+            elif val is not None:
+                preview_val = str(val)[:100].replace("\n", " ")
+                print(f"    {col}: '{preview_val}...'")
         if OTHER_SECTIONS_COL_NAME in columns_to_insert and other_sections_content:
              print(f"    Contenu DÉTAILLÉ de {OTHER_SECTIONS_COL_NAME}:")
              print(json.dumps(other_sections_content, ensure_ascii=False, indent=2))
