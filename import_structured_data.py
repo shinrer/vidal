@@ -75,9 +75,6 @@ def import_cis_bdpm(cursor: sqlite3.Cursor, file_path: Path):
     return unique_cis_set, imported_count, skipped_count
 
 # Placeholder for other import functions (will be added incrementally)
-def import_cis_cip_bdpm(cursor: sqlite3.Cursor, file_path: Path):
-    print(f"Placeholder: Importing data from {file_path.name} into Presentations table...")
-    return 0, 0
 
 def import_cis_cip_bdpm(cursor: sqlite3.Cursor, file_path: Path):
     """Imports data from CIS_CIP_bdpm.txt into Presentations table."""
