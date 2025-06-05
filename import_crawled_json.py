@@ -53,7 +53,12 @@ def process_file(conn: sqlite3.Connection, file_path: Path):
 
 def main():
     parser = argparse.ArgumentParser(description="Import crawled RCP JSON files into the database")
-    parser.add_argument("json_dir", help="Directory containing crawled JSON files")
+    # Modification: Ajout du chemin par défaut pour json_dir
+    parser.add_argument(
+        "--json_dir",
+        default=r"C:\Users\abiche\Documents\git-projects\vidal\vidal\JSONs",
+        help="Directory containing crawled JSON files"
+    )
     parser.add_argument("--db", default=DB_NAME, help="SQLite database path")
     args = parser.parse_args()
 
@@ -68,10 +73,12 @@ def main():
     for json_file in sorted(json_dir.glob("*.json")):
         try:
             process_file(conn, json_file)
+            print(f"Successfully processed {json_file.name}") # Ajout d'un message de succès
         except Exception as e:
             print(f"Error processing {json_file.name}: {e}")
     conn.commit()
     conn.close()
+    print("Database import process finished.") # Ajout d'un message de fin
 
 
 if __name__ == "__main__":
