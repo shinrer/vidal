@@ -44,10 +44,6 @@ PREDEFINED_COLUMNS_STRUCTURE = {
     "dosimetrie": "TEXT",
     "instructions_pour_la_preparation_des_radiopharmaceutiques": "TEXT",
     "conditions_de_prescription_et_de_delivrance": "TEXT"
-    ,"col_donnees_cliniques": "TEXT"
-    ,"col_proprietes_pharmacologiques": "TEXT"
-    ,"col_donnees_pharmaceutiques": "TEXT"
-    ,"col_informations_complementaires": "TEXT"
 }
 OTHER_SECTIONS_COL_NAME = "other_parsed_sections_json"
 IGNORE_SECTION_MARKER = "_IGNORE_THIS_SECTION_" 
@@ -135,10 +131,10 @@ def initialize_target_title_map():
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Conditions de prescription et de délivrance")] = "conditions_de_prescription_et_de_delivrance"
 
     # Titres de section de haut niveau 
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données cliniques")] = "col_donnees_cliniques"
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Propriétés pharmacologiques")] = "col_proprietes_pharmacologiques"
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données pharmaceutiques")] = "col_donnees_pharmaceutiques"
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Informations complementaires")] = "col_informations_complementaires"
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données cliniques")] = IGNORE_SECTION_MARKER
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Propriétés pharmacologiques")] = IGNORE_SECTION_MARKER
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données pharmaceutiques")] = IGNORE_SECTION_MARKER
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Informations complementaires")] = IGNORE_SECTION_MARKER
     
     # Autres titres à ignorer spécifiquement
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Retour en haut de la page")] = IGNORE_SECTION_MARKER
