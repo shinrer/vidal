@@ -1,5 +1,3 @@
-# --- Fichier : transformer_dp_updated.py (Approche Radicale - Prêt pour itération) ---
-
 import json
 import sqlite3
 import re
@@ -11,8 +9,11 @@ from tqdm import tqdm
 DB_NAME = 'rcp_wide_database.db'
 TABLE_NAME = 'MedicamentsRCP'
 
-# Variable globale pour le débogage
+# Variable globale pour le débogage, à remplir avec des codes CIS si besoin
 debug_specific_cis_list_global = []
+# Pour activer le débogage pour les titres que vous avez mentionnés,
+# il faut que le CIS du fichier JSON contenant ces titres soit dans cette liste.
+# EXEMPLE: debug_specific_cis_list_global = ['CIS_DU_FICHIER_PROBLEM']
 
 # Colonnes prédéfinies dans la base de données
 PREDEFINED_COLUMNS_STRUCTURE = {
@@ -46,103 +47,125 @@ PREDEFINED_COLUMNS_STRUCTURE = {
     "conditions_de_prescription_et_de_delivrance": "TEXT"
 }
 OTHER_SECTIONS_COL_NAME = "other_parsed_sections_json"
-IGNORE_SECTION_MARKER = "_IGNORE_THIS_SECTION_" 
+IGNORE_SECTION_MARKER = "_IGNORE_THIS_SECTION_"
+
+# --- Titres spécifiques que vous voulez tracer ---
+TITLES_TO_DEBUG = [
+    "DONNEES CLINIQUES",
+    "PROPRIETES PHARMACOLOGIQUES",
+    "DONNEES PHARMACEUTIQUES",
+    "6.6. Précautions particulières d’élimination et de manipulation", # Note: apostrophe typographique ici
+    "TITULAIRE DE L’AUTORISATION DE MISE SUR LE MARCHE",         # Note: apostrophe typographique ici
+    "NUMERO(S) D’AUTORISATION DE MISE SUR LE MARCHE",        # Note: apostrophe typographique ici
+    "DATE DE PREMIERE AUTORISATION/DE RENOUVELLEMENT DE L’AUTORISATION" # Note: apostrophe typographique ici
+]
 
 def clean_title_for_mapping(title: str, debug_cis_code: str = None) -> str:
-    is_debug_active = debug_cis_code and debug_cis_code in debug_specific_cis_list_global
-    
+    # Détermine si le débogage détaillé est actif
+    original_title_for_debug_display = title.split('\n')[0].strip() # Pour l'affichage avant nettoyage
+    is_debug_active_for_title = original_title_for_debug_display in TITLES_TO_DEBUG or \
+                                (debug_cis_code and debug_cis_code in debug_specific_cis_list_global)
+
     if not title:
         return ""
 
     cleaned = title.split('\n')[0].strip()
 
-    cleaned = unicodedata.normalize('NFKD', cleaned).encode('ascii', 'ignore').decode('utf-8').lower()
+    # *** DEBUT MODIFICATION OPTION 1 ***
+    # Remplacer les apostrophes typographiques courantes par une apostrophe droite standard
+    cleaned = cleaned.replace("’", "'").replace("‘", "'").replace("`", "'")
 
-    # Tentative de suppression plus robuste des préfixes (numériques, romains, lettres simples)
-    # ex: "1. ", "1.1. ", "IV. ", "a) ", "a. "
-    # Ce regex cherche un préfixe au début, suivi d'un point ou d'une parenthèse, et d'espaces.
-    # Il est non-greedy sur le préfixe lui-même pour éviter de manger des parties du titre si le titre commence par un chiffre/lettre.
+    # Normalisation pour décomposer les caractères accentués, MAIS ATTENTION avec 'ascii', 'ignore'
+    # Si on veut garder les apostrophes droites, il faut s'assurer qu'elles ne sont pas supprimées.
+    # L'apostrophe droite standard (U+0027) EST un caractère ASCII.
+    cleaned_normalized = unicodedata.normalize('NFKD', cleaned)
+    # Encodage en ASCII, ignorant les caractères non-ASCII. L'apostrophe droite survivra.
+    cleaned_ascii = cleaned_normalized.encode('ascii', 'ignore').decode('utf-8')
+    cleaned = cleaned_ascii.lower()
+    # *** FIN MODIFICATION OPTION 1 (PARTIE 1) ***
+
+    # Suppression des préfixes numériques/romains/alphabétiques
     cleaned = re.sub(r"^\s*([0-9ivxlcdm]+(?:[\.\-][0-9ivxlcdm]+)*|[a-z])[\.\)]\s+", "", cleaned, 1)
-    # Si ça n'a rien fait (ex: "1.Titre" collé), essayer une version qui n'exige pas d'espace après le point/parenthèse.
     cleaned = re.sub(r"^\s*([0-9ivxlcdm]+(?:[\.\-][0-9ivxlcdm]+)*|[a-z])[\.\)]", "", cleaned, 1).strip()
-    # Et encore une fois pour les numérotations sans point/parenthèse mais avec espace: "1 Titre"
     cleaned = re.sub(r"^\s*([0-9ivxlcdm]+(?:[\.\-][0-9ivxlcdm]+)*|[a-z])\s+", "", cleaned, 1).strip()
-
 
     cleaned = re.sub(r'\(s\)', 's', cleaned) # numero(s) -> numeros
     cleaned = re.sub(r'\(suite\)', '', cleaned) # Titre (suite) -> Titre
     
+    # *** DEBUT MODIFICATION OPTION 1 (PARTIE 2) ***
     # Enlever la ponctuation finale et normaliser les espaces
-    cleaned = re.sub(r"[^\w\s\-\+&'/\\]+$", "", cleaned).strip() # Garde '/' et '\' pour certains cas (ex: AMM)
+    # S'assurer que l'apostrophe (') est CONSERVÉE dans la classe de caractères \w\s\-\+&'/\\]
+    cleaned = re.sub(r"[^\w\s\-\+&'/\\]+$", "", cleaned).strip() # Garde '/' et '\' et l'apostrophe '
+    # *** FIN MODIFICATION OPTION 1 (PARTIE 2) ***
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
 
-    # if is_debug_active: print(f"    [CLEAN_TITLE DEBUG {debug_cis_code}] Orig: '{title.split('\n')[0].strip()}' -> Cleaned: '{cleaned}'")
+    if is_debug_active_for_title:
+        print(f"  [DEBUG clean_title_for_mapping] Input: '{original_title_for_debug_display}' -> Output: '{cleaned}'")
     return cleaned
 
 TARGET_TITLE_TO_DB_COLUMN_MAP = {}
 
 def initialize_target_title_map():
     global TARGET_TITLE_TO_DB_COLUMN_MAP
-    # Titres principaux
+    print("[DEBUG initialize_target_title_map] Initialisation des mappings...")
+    # Les chaînes ici utilisent l'apostrophe droite standard "'"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Dénomination du médicament")] = "denomination_du_medicament"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Composition qualitative et quantitative")] = "composition_qualitative_et_quantitative"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Forme pharmaceutique")] = "forme_pharmaceutique"
 
-    # Sections "Données cliniques" (4.x)
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Indications thérapeutiques")] = "s4_1_indications_therapeutiques"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Posologie et mode d'administration")] = "s4_2_posologie_et_mode_d_administration"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Contre-indications")] = "s4_3_contre_indications"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Mises en garde spéciales et précautions d'emploi")] = "s4_4_mises_en_garde_speciales_et_precautions_d_emploi"
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Mises en garde et précautions d'emploi")] = "s4_4_mises_en_garde_speciales_et_precautions_d_emploi" 
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Mises en garde et précautions d'emploi")] = "s4_4_mises_en_garde_speciales_et_precautions_d_emploi"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Interactions avec d'autres médicaments et autres formes d'interactions")] = "s4_5_interactions_avec_d_autres_medicaments_et_autres_formes_d_interactions"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Fertilité, grossesse et allaitement")] = "s4_6_fertilite_grossesse_et_allaitement"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Effets sur l'aptitude à conduire des véhicules et à utiliser des machines")] = "s4_7_effets_sur_l_aptitude_a_conduire_des_vehicules_et_a_utiliser_des_machines"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Effets indésirables")] = "s4_8_effets_indesirables"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Surdosage")] = "s4_9_surdosage"
 
-    # Sections "Propriétés pharmacologiques" (5.x)
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Propriétés pharmacodynamiques")] = "s5_1_proprietes_pharmacodynamiques"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Propriétés pharmacocinétiques")] = "s5_2_proprietes_pharmacocinetiques"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données de sécurité préclinique")] = "s5_3_donnees_de_securite_preclinique"
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données de sécurité précliniques")] = "s5_3_donnees_de_securite_preclinique" 
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données de sécurité précliniques")] = "s5_3_donnees_de_securite_preclinique"
 
-    # Sections "Données pharmaceutiques" (6.x)
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Liste des excipients")] = "s6_1_liste_des_excipients"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Incompatibilités majeures")] = "s6_2_incompatibilites_majeures"
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Incompatibilités")] = "s6_2_incompatibilites_majeures" 
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Incompatibilités")] = "s6_2_incompatibilites_majeures"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Durée de conservation")] = "s6_3_duree_de_conservation"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Précautions particulières de conservation")] = "s6_4_precautions_particulieres_de_conservation"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Nature et contenu de l'emballage extérieur")] = "s6_5_nature_et_contenu_de_l_emballage_exterieur"
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Nature et contenu de l'emballage")] = "s6_5_nature_et_contenu_de_l_emballage_exterieur" 
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Nature et contenu de l'emballage")] = "s6_5_nature_et_contenu_de_l_emballage_exterieur"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Précautions particulières d'élimination et de manipulation")] = "s6_6_precautions_particulieres_d_elimination_et_de_manipulation"
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Précautions particulières d'élimination")] = "s6_6_precautions_particulieres_d_elimination_et_de_manipulation" 
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Précautions particulières d'élimination")] = "s6_6_precautions_particulieres_d_elimination_et_de_manipulation"
 
-    # Autres sections de premier niveau
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Titulaire de l'autorisation de mise sur le marché")] = "titulaire_de_l_autorisation_de_mise_sur_le_marche"
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Numéro(s) d'autorisation de mise sur le marché")] = "numero_s_d_autorisation_de_mise_sur_le_marche"
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Numero d'autorisation de mise sur le marche")] = "numero_s_d_autorisation_de_mise_sur_le_marche" 
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Numeros d'amm")] = "numero_s_d_autorisation_de_mise_sur_le_marche" 
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Numero d'amm")] = "numero_s_d_autorisation_de_mise_sur_le_marche" 
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Numéro(s) d'autorisation de mise sur le marché")] = "numero_s_d_autorisation_de_mise_sur_le_marche" # Note (s) et apostrophe '
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Numero d'autorisation de mise sur le marche")] = "numero_s_d_autorisation_de_mise_sur_le_marche"
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Numeros d'amm")] = "numero_s_d_autorisation_de_mise_sur_le_marche"
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Numero d'amm")] = "numero_s_d_autorisation_de_mise_sur_le_marche"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Date de première autorisation/de renouvellement de l'autorisation")] = "date_de_premiere_autorisation_de_renouvellement_de_l_autorisation"
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Date de première autorisation et ou de renouvellement de l'autorisation")] = "date_de_premiere_autorisation_de_renouvellement_de_l_autorisation" # Avec et/ou
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Date de première autorisation et ou de renouvellement de l'autorisation")] = "date_de_premiere_autorisation_de_renouvellement_de_l_autorisation"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Date de mise à jour du texte")] = "date_de_mise_a_jour_du_texte"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Dosimétrie")] = "dosimetrie"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Instructions pour la préparation des radiopharmaceutiques")] = "instructions_pour_la_preparation_des_radiopharmaceutiques"
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Conditions de prescription et de délivrance")] = "conditions_de_prescription_et_de_delivrance"
 
-    # Titres de section de haut niveau 
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données cliniques")] = IGNORE_SECTION_MARKER
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Propriétés pharmacologiques")] = IGNORE_SECTION_MARKER
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Données pharmaceutiques")] = IGNORE_SECTION_MARKER
     TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Informations complementaires")] = IGNORE_SECTION_MARKER
-    
-    # Autres titres à ignorer spécifiquement
-    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Retour en haut de la page")] = IGNORE_SECTION_MARKER
-    cleaned_ansm_title = clean_title_for_mapping("ANSM - Mis à jour le : JJ/MM/AAAA") # Nettoyer un exemple
-    if cleaned_ansm_title.startswith("ansm"): # Pour être plus générique
-         TARGET_TITLE_TO_DB_COLUMN_MAP[cleaned_ansm_title.split(':')[0].strip()] = IGNORE_SECTION_MARKER # ex: "ansm - mis a jour le"
 
-    print(f"TARGET_TITLE_TO_DB_COLUMN_MAP initialisé avec {len(TARGET_TITLE_TO_DB_COLUMN_MAP)} mappages.")
+    TARGET_TITLE_TO_DB_COLUMN_MAP[clean_title_for_mapping("Retour en haut de la page")] = IGNORE_SECTION_MARKER
+    cleaned_ansm_title = clean_title_for_mapping("ANSM - Mis à jour le : JJ/MM/AAAA")
+    if cleaned_ansm_title.startswith("ansm"): # Pour être plus générique
+         TARGET_TITLE_TO_DB_COLUMN_MAP[cleaned_ansm_title.split(':')[0].strip()] = IGNORE_SECTION_MARKER
+
+    print(f"[DEBUG initialize_target_title_map] Fin initialisation. {len(TARGET_TITLE_TO_DB_COLUMN_MAP)} mappages chargés.")
+    # Optionnel: Imprimer toutes les clés mappées pour vérification
+    # print("[DEBUG initialize_target_title_map] Clés mappées dans TARGET_TITLE_TO_DB_COLUMN_MAP:")
+    # for k, v in TARGET_TITLE_TO_DB_COLUMN_MAP.items():
+    #     print(f"  '{k}' -> '{v}'")
 
 initialize_target_title_map()
 
@@ -151,7 +174,7 @@ def segment_rcp_from_old_script(rcp_text: str, code_cis_for_debug: str) -> list[
     sections = []
     if not rcp_text or rcp_text.isspace(): return sections
     
-    is_debug_active = code_cis_for_debug and code_cis_for_debug in debug_specific_cis_list_global
+    # is_debug_active = code_cis_for_debug and code_cis_for_debug in debug_specific_cis_list_global
 
     title_pattern = re.compile(
         r"^(?P<full_title>"
@@ -186,9 +209,7 @@ def segment_rcp_from_old_script(rcp_text: str, code_cis_for_debug: str) -> list[
             title_content_for_mapping = full_raw_title_multiline
         
         temp_check_title = re.sub(r'[^a-zA-Z]', '', title_content_for_mapping.split('\n')[0])
-        if len(temp_check_title) < 3 and not title_content_for_mapping.isupper(): 
-            # if is_debug_active:
-            #     print(f"  [SEGMENT DEBUG {code_cis_for_debug}] Titre potentiel '{title_content_for_mapping.replace('\n',' ')}' ignoré (trop court/non-alpha après nettoyage)")
+        if len(temp_check_title) < 3 and not title_content_for_mapping.isupper():
             continue
         
         split_points.append({
@@ -210,9 +231,6 @@ def segment_rcp_from_old_script(rcp_text: str, code_cis_for_debug: str) -> list[
             guessed_title_before = text_before_first_title.split('\n')[0].strip()
             if len(guessed_title_before) > 150 or not guessed_title_before : 
                  guessed_title_before = "Section initiale non titree"
-
-            # Essayer de mapper ce titre deviné directement.
-            # Si c'est la dénomination, ça devrait mapper.
             sections.append((guessed_title_before, guessed_title_before, text_before_first_title, current_order))
             current_order +=1
 
@@ -256,7 +274,6 @@ def create_wide_table(conn):
     try:
         cursor.execute(create_table_sql)
         conn.commit()
-        print(f"Table '{TABLE_NAME}' créée ou déjà existante.")
     except sqlite3.Error as e:
         print(f"Erreur SQLite lors de la création de la table {TABLE_NAME}: {e}")
         raise
@@ -268,64 +285,60 @@ def process_rcp_with_segmentation_logic(cis_code: str, rcp_text: str, source_fil
 
     if not rcp_text or isinstance(rcp_text, str) and (rcp_text.startswith("ERREUR_") or \
         rcp_text in ["TEXTE_VIDE_OU_COURT", "AUCUN_DOCUMENT_DISPONIBLE_MSG", "RCP_NON_TROUVE_404", "AUCUN_DOCUMENT_DISPONIBLE"]):
-        if is_debug_cis_active_here: print(f"DEBUG [{cis_code}]: Texte RCP invalide ou erreur, ignoré.")
         return False
 
     if is_debug_cis_active_here:
-        print(f"\n--- DÉBOGAGE POUR CIS {cis_code} ---")
-        print(f"Source: {source_filename}")
+        print(f"\n--- DÉBOGAGE POUR CIS {cis_code} --- Source: {source_filename} ---")
     
     segmented_sections = segment_rcp_from_old_script(rcp_text, cis_code)
 
-    if is_debug_cis_active_here:
-        print(f"  CIS {cis_code}: {len(segmented_sections)} sections brutes candidates après segmentation.")
-
     if not segmented_sections:
-        if is_debug_cis_active_here: print(f"  CIS {cis_code}: Aucune section trouvée par segment_rcp_from_old_script.")
+        if is_debug_cis_active_here: print(f"  [DEBUG {cis_code}] Aucune section trouvée par segment_rcp_from_old_script.")
         return False
 
     db_entry = {col_name: None for col_name in PREDEFINED_COLUMNS_STRUCTURE.keys()}
     other_sections_content = {}
-    processed_section_titles_for_debug = []
 
+    if is_debug_cis_active_here: print(f"  [DEBUG {cis_code}] Traitement des sections segmentées...")
     for title_for_logic_mapping, original_title_from_regex, texte_section, ordre in segmented_sections:
-        cleaned_title = clean_title_for_mapping(title_for_logic_mapping, debug_cis_code=cis_code if is_debug_cis_active_here else None)
+        original_title_display = original_title_from_regex.strip() # Pour la comparaison avec TITLES_TO_DEBUG
+        title_logic_display = title_for_logic_mapping.strip() # Pour la comparaison avec TITLES_TO_DEBUG
         
-        if is_debug_cis_active_here:
-            orig_title_single_line = original_title_from_regex.replace("\n", " ")
-            logic_title_single_line = title_for_logic_mapping.replace("\n", " ")
-            log_entry = (
-                f"    - Ordre {ordre}: Titre Regex='{orig_title_single_line}' "
-                f"-> Titre Logic='{logic_title_single_line}' "
-                f"-> Cleaned='{cleaned_title}'"
-            )
-             
+        should_debug_this_title_cleaning = is_debug_cis_active_here or \
+                                          original_title_display in TITLES_TO_DEBUG or \
+                                          title_logic_display in TITLES_TO_DEBUG
+                                          
+        cleaned_title = clean_title_for_mapping(
+            title_for_logic_mapping,
+            debug_cis_code=cis_code if should_debug_this_title_cleaning else None
+        )
+        
         db_column_name = TARGET_TITLE_TO_DB_COLUMN_MAP.get(cleaned_title)
 
+        if is_debug_cis_active_here or original_title_display in TITLES_TO_DEBUG or title_logic_display in TITLES_TO_DEBUG:
+            print(f"    [DEBUG MAP {cis_code if cis_code else 'N/A'}] Original Raw: '{original_title_from_regex.replace('\n',' ')}'")
+            print(f"      Logic Title: '{title_for_logic_mapping.replace('\n',' ')}' -> Cleaned: '{cleaned_title}'")
+            print(f"      -> Mapped Column: '{db_column_name}'")
+
         if db_column_name == IGNORE_SECTION_MARKER:
-            if is_debug_cis_active_here:
-                processed_section_titles_for_debug.append(log_entry + " -> IGNORED (MARKER)")
+            if is_debug_cis_active_here or original_title_display in TITLES_TO_DEBUG or title_logic_display in TITLES_TO_DEBUG:
+                print(f"      -> Action: IGNORED (marker)")
             continue
         
         if db_column_name and db_column_name in PREDEFINED_COLUMNS_STRUCTURE:
             if db_entry.get(db_column_name) is None:
                 db_entry[db_column_name] = texte_section
             else: 
-                orig_regex_single_line = original_title_from_regex.replace("\n", " ")
-                db_entry[db_column_name] += (
-                    f"\n\n--- Autre section pour même titre '{cleaned_title}' "
-                    f"(Original Regex: {orig_regex_single_line}) ---\n" + texte_section
-                )
-            if is_debug_cis_active_here: 
-                processed_section_titles_for_debug.append(log_entry + f" -> MAPPED TO: {db_column_name}")
+                db_entry[db_column_name] += f"\n\n--- Autre section pour même titre '{cleaned_title}' (Original Regex: {original_title_from_regex.replace('\n',' ')}) ---\n" + texte_section
+            if is_debug_cis_active_here or original_title_display in TITLES_TO_DEBUG or title_logic_display in TITLES_TO_DEBUG:
+                 print(f"      -> Action: MAPPED to PREDEFINED column '{db_column_name}'")
 
-        else: # Non mappé ou mappé à None (non IGNORE_SECTION_MARKER)
+        else: 
             key_for_other = original_title_from_regex.replace('\n', ' ').strip()
             key_for_other = re.sub(r'\s+', '_', key_for_other)
             key_for_other = re.sub(r'[^a-zA-Z0-9_]+', '', key_for_other)[:80].strip('_') 
             
-            if not key_for_other: 
-                key_for_other = f"section_non_identifiee_{ordre}"
+            if not key_for_other: key_for_other = f"section_non_identifiee_{ordre}"
 
             original_key_for_other_json = key_for_other
             count = 1
@@ -340,14 +353,8 @@ def process_rcp_with_segmentation_logic(cis_code: str, rcp_text: str, source_fil
                 "text": texte_section,
                 "order_in_document": ordre
             }
-            if is_debug_cis_active_here: 
-                processed_section_titles_for_debug.append(log_entry + f" -> OTHER (key: {key_for_other})")
-
-
-    if is_debug_cis_active_here and processed_section_titles_for_debug:
-        print(f"  CIS {cis_code}: Titres traités pour le mapping ({len(processed_section_titles_for_debug)}):")
-        for line in processed_section_titles_for_debug:
-            print(line)
+            if is_debug_cis_active_here or original_title_display in TITLES_TO_DEBUG or title_logic_display in TITLES_TO_DEBUG:
+                 print(f"      -> Action: Added to OTHER_SECTIONS (key: '{key_for_other}')")
 
     columns_to_insert = ["cis_code", "source_filename", "parsed_at"]
     values_to_insert = [cis_code, source_filename, datetime.now().isoformat()]
@@ -366,21 +373,16 @@ def process_rcp_with_segmentation_logic(cis_code: str, rcp_text: str, source_fil
              has_valid_data = True
 
     if not has_valid_data:
-        if is_debug_cis_active_here: print(f"  CIS {cis_code}: Aucune donnée pertinente à insérer. Ignoré pour l'insertion.")
+        if is_debug_cis_active_here: print(f"  [DEBUG {cis_code}] Aucune donnée pertinente à insérer. Ignoré pour l'insertion.")
         return False
 
     if is_debug_cis_active_here:
-        print(f"  CIS {cis_code}: Données prêtes pour insertion (aperçu des colonnes remplies):")
+        print(f"  [DEBUG {cis_code}] Données prêtes pour insertion (aperçu des colonnes remplies):")
         for col, val in zip(columns_to_insert, values_to_insert):
             if col == OTHER_SECTIONS_COL_NAME and other_sections_content:
-                 print(f"    {col}: (Contient {len(other_sections_content)} sections, voir JSON complet si généré)")
-            elif val is not None:
-                preview_val = str(val)[:100].replace("\n", " ")
-                print(f"    {col}: '{preview_val}...'")
-        if OTHER_SECTIONS_COL_NAME in columns_to_insert and other_sections_content:
-             print(f"    Contenu DÉTAILLÉ de {OTHER_SECTIONS_COL_NAME}:")
-             print(json.dumps(other_sections_content, ensure_ascii=False, indent=2))
-        print(f"--- FIN DÉBOGAGE POUR CIS {cis_code} ---\n")
+                 print(f"    {col}: (Contient {len(other_sections_content)} sections)")
+            elif val is not None: 
+                print(f"    {col}: '{str(val)[:50].replace('\n',' ')}...'")
 
     placeholders = ["?"] * len(columns_to_insert)
     sql = f"INSERT OR REPLACE INTO {TABLE_NAME} ({', '.join(columns_to_insert)}) VALUES ({', '.join(placeholders)})"
@@ -388,54 +390,114 @@ def process_rcp_with_segmentation_logic(cis_code: str, rcp_text: str, source_fil
     cursor = conn.cursor()
     try:
         cursor.execute(sql, values_to_insert)
+        if is_debug_cis_active_here: print(f"  [DEBUG {cis_code}] Insertion réussie.")
         return True
     except sqlite3.Error as e:
         print(f"  Erreur SQLite lors de l'insertion pour CIS {cis_code} (fichier: {source_filename}): {e}")
         if is_debug_cis_active_here: print(f"--- FIN DÉBOGAGE AVEC ERREUR POUR CIS {cis_code} ---\n")
         return False
 
-if __name__ == "__main__":
-    master_json_file_path = "all_rcps_data.json"
-    
-    debug_specific_cis_list_global = ['60219803'] # Mettez ici les CIS à déboguer
-    # debug_specific_cis_list_global = [] # Décommentez pour traiter tous les CIS
 
-    if not os.path.exists(master_json_file_path):
-        print(f"Erreur: Le fichier JSON maître '{master_json_file_path}' n'a pas été trouvé.")
-    else:
-        conn = sqlite3.connect(DB_NAME)
-        create_wide_table(conn)
+if __name__ == "__main__":
+    master_json_file_path = "all_rcps_data.json" 
+    
+    # --- IMPORTANT POUR LE DÉBOGAGE ---
+    # Pour tester avec le JSON que vous avez montré dans la question précédente :
+    # 1. Mettez un identifiant (ex: 'CIS_DU_FICHIER_PROBLEM') dans debug_specific_cis_list_global
+    # 2. Le bloc `if len(debug_specific_cis_list_global) == 1 and debug_specific_cis_list_global[0] == "CIS_DU_FICHIER_PROBLEM":`
+    #    sera activé pour utiliser les données JSON d'exemple directement.
+    debug_specific_cis_list_global = ['CIS_DU_FICHIER_PROBLEM'] # Active le mode de test spécifique
+    # debug_specific_cis_list_global = [] # Décommentez pour traiter tous les CIS du master_json
+
+    conn = sqlite3.connect(DB_NAME)
+    create_wide_table(conn)
+    
+    items_to_process_dict = {}
+
+    if len(debug_specific_cis_list_global) == 1 and debug_specific_cis_list_global[0] == "CIS_DU_FICHIER_PROBLEM":
+        print("INFO: Mode de test pour un JSON spécifique (comme celui de la question précédente).")
+        test_json_data = {
+            "cis_code": "CIS_DU_FICHIER_PROBLEM",
+            "source_filename": "exemple_problematique.json",
+            "DONNEES CLINIQUES": "", # Titre d'exemple
+            "PROPRIETES PHARMACOLOGIQUES": "", # Titre d'exemple
+            "DONNEES PHARMACEUTIQUES": "", # Titre d'exemple
+            "6.6. Précautions particulières d’élimination et de manipulation": "Le contenu pour 6.6...", # Apostrophe typographique
+            "TITULAIRE DE L’AUTORISATION DE MISE SUR LE MARCHE": "Le contenu pour Titulaire...", # Apostrophe typographique
+            "NUMERO(S) D’AUTORISATION DE MISE SUR LE MARCHE": "Le contenu pour Numéro(s)...", # Apostrophe typographique
+            "DATE DE PREMIERE AUTORISATION/DE RENOUVELLEMENT DE L’AUTORISATION": "Le contenu pour Date..." # Apostrophe typographique
+        }
         
-        print(f"Lecture du fichier JSON maître: {master_json_file_path}...")
+        print(f"\n--- DÉBOGAGE POUR JSON SPÉCIFIQUE (CIS: {test_json_data['cis_code']}) ---")
+        db_entry = {col_name: None for col_name in PREDEFINED_COLUMNS_STRUCTURE.keys()}
+        other_sections_content = {}
+        
+        cis_code_test = test_json_data.get("cis_code", "UNKNOWN_CIS")
+        
+        for key, value in test_json_data.items():
+            if key in ["cis_code", "source_filename"]:
+                continue
+
+            original_title_for_debug = key 
+            title_for_logic_mapping = key
+            texte_section = str(value) 
+            
+            # Utiliser le cis_code_test pour potentiellement activer les prints dans clean_title_for_mapping
+            cleaned_title = clean_title_for_mapping(title_for_logic_mapping, debug_cis_code=cis_code_test)
+            db_column_name = TARGET_TITLE_TO_DB_COLUMN_MAP.get(cleaned_title)
+
+            print(f"    [DEBUG MAP {cis_code_test}] Original Key: '{original_title_for_debug}'")
+            print(f"      -> Cleaned: '{cleaned_title}'")
+            print(f"      -> Mapped DB Column: '{db_column_name}'")
+
+            if db_column_name == IGNORE_SECTION_MARKER:
+                print(f"      -> Action: IGNORED (marker)")
+                continue
+            
+            if db_column_name and db_column_name in PREDEFINED_COLUMNS_STRUCTURE:
+                if db_entry.get(db_column_name) is None:
+                    db_entry[db_column_name] = texte_section
+                else:
+                    db_entry[db_column_name] += f"\n\n--- Autre section pour même titre '{cleaned_title}' ---\n" + texte_section
+                print(f"      -> Action: MAPPED to PREDEFINED column '{db_column_name}'")
+            else:
+                key_for_other = original_title_for_debug 
+                other_sections_content[key_for_other] = texte_section # Stockage simplifié pour le test
+                print(f"      -> Action: Added to OTHER_SECTIONS (key: '{key_for_other}')")
+        
+        print(f"--- FIN DÉBOGAGE JSON SPÉCIFIQUE ---")
+        # Ici, vous pourriez ajouter l'insertion dans la DB si vous voulez tester cette partie aussi.
+        # Par exemple, en appelant une version modifiée de process_rcp_with_segmentation_logic
+        # ou en reconstruisant la logique d'insertion ici.
+        # Pour l'instant, on se concentre sur le mappage.
+
+    elif os.path.exists(master_json_file_path):
+        print(f"INFO: Lecture du fichier JSON maître: {master_json_file_path}...")
         try:
             with open(master_json_file_path, 'r', encoding='utf-8') as f:
                 all_rcps_data = json.load(f)
+            items_to_process_dict = all_rcps_data
+            if debug_specific_cis_list_global: # Si la liste n'est pas pour le test spécifique ci-dessus
+                items_to_process_dict = {cis: text for cis, text in all_rcps_data.items() if cis in debug_specific_cis_list_global}
+                if not items_to_process_dict:
+                    print(f"AVERTISSEMENT: Aucun des CIS spécifiés pour le débogage ({debug_specific_cis_list_global}) n'a été trouvé dans {master_json_file_path}.")
         except Exception as e:
             print(f"Erreur lors de la lecture ou du parsing de {master_json_file_path}: {e}")
             if conn: conn.close()
             exit()
-
-        if not isinstance(all_rcps_data, dict):
-            print(f"Erreur: Contenu de {master_json_file_path} n'est pas un dictionnaire.")
+        if not isinstance(items_to_process_dict, dict):
+            print(f"Erreur: Contenu de {master_json_file_path} n'est pas un dictionnaire ou aucun CIS à traiter.")
             if conn: conn.close()
             exit()
-            
-        # print(f"{len(all_rcps_data)} entrées CIS trouvées dans le JSON.") # Déplacé après initialisation du map
-        
+    else:
+         print(f"Erreur: Le fichier JSON maître '{master_json_file_path}' n'a pas été trouvé et le mode de test spécifique n'est pas activé.")
+
+
+    if items_to_process_dict: # S'assurer qu'il y a quelque chose à traiter
+        print(f"Traitement de {len(items_to_process_dict)} entrées CIS.")
         cis_processed_count = 0
         cis_inserted_count = 0
         commit_interval = 100
-
-        items_to_process_dict = all_rcps_data
-        if debug_specific_cis_list_global:
-            print(f"INFO: Mode débogage actif pour les CIS: {debug_specific_cis_list_global}")
-            items_to_process_dict = {cis: text for cis, text in all_rcps_data.items() if cis in debug_specific_cis_list_global}
-            if not items_to_process_dict:
-                print(f"AVERTISSEMENT: Aucun des CIS spécifiés pour le débogage ({debug_specific_cis_list_global}) n'a été trouvé dans {master_json_file_path}.")
-                if conn: conn.close()
-                exit()
-        
-        print(f"Traitement de {len(items_to_process_dict)} entrées CIS (sur {len(all_rcps_data)} total).")
 
         for cis_code, rcp_text_content in tqdm(items_to_process_dict.items(), desc="Transformation RCPs"):
             source_filename = f"from_master_json_{cis_code}"
@@ -443,11 +505,12 @@ if __name__ == "__main__":
                 cis_inserted_count += 1
             
             cis_processed_count += 1
+            # Commit par intervalle seulement si on ne débogue pas un CIS spécifique (pour ne pas interférer avec les logs)
             if not debug_specific_cis_list_global and cis_processed_count > 0 and cis_processed_count % commit_interval == 0:
                 conn.commit()
         
         conn.commit() 
-        if conn: conn.close()
-        
         print(f"\nTraitement terminé. {cis_processed_count} entrées CIS traitées.")
         print(f"{cis_inserted_count} RCPs valides insérés/mis à jour dans la table '{TABLE_NAME}'.")
+    
+    if conn: conn.close()
