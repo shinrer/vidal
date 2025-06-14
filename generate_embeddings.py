@@ -1,17 +1,14 @@
 import sqlite3
-import numpy as np
 from sentence_transformers import SentenceTransformer
+import torch
 import datetime
 from tqdm import tqdm
+import time
 import traceback
-import pickle # Pour sérialiser/désérialiser les embeddings (numpy arrays)
+import argparse
 
 # --- Configuration ---
 DATABASE_NAME = "medicaments.db"
-MODEL_NAME = 'paraphrase-multilingual-mpnet-base-v2' # Bon modèle multilingue, dimension 768
-# Alternative plus légère: 'all-MiniLM-L6-v2' (dimension 384)
-BATCH_SIZE = 32  # Nombre de textes à encoder en parallèle par le modèle
-COMMIT_INTERVAL = 100 # Nombre d'embeddings traités avant un commit
 
 # --- Logging ---
 def log_info(message: str):
@@ -29,12 +26,42 @@ def get_db_connection():
         log_error(f"Database connection error: {e}\n{traceback.format_exc()}")
         raise
 
-def generate_and_store_embeddings():
-    log_info(f"--- Démarrage de la génération d'embeddings avec le modèle : {MODEL_NAME} ---")
+# --- Encoding helper ---
+def encode_batch(model, device: str, texts, batch_size: int):
+    """Encode a batch of texts with optional CUDA autocast."""
+    if device == "cuda":
+        with torch.cuda.amp.autocast():
+            return model.encode(
+                texts,
+                batch_size=batch_size,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+            )
+    else:
+        return model.encode(
+            texts,
+            batch_size=batch_size,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+        )
+
+def generate_and_store_embeddings(model_name: str, batch_size: int, commit_interval: int):
+    log_info(
+        f"--- Démarrage de la génération d'embeddings avec le modèle : {model_name} ---"
+    )
     
     try:
+        # Initialize model on the appropriate device
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"👉  Using {device}")
+
         log_info("Chargement du modèle SentenceTransformer...")
-        model = SentenceTransformer(MODEL_NAME)
+        model = SentenceTransformer(model_name, device=device)
+
+        if device == "cuda":
+            model.half()  # load weights in FP16/BF16
+            torch.set_default_dtype(torch.float16)
+
         log_info("Modèle chargé.")
     except Exception as e:
         log_error(f"Erreur lors du chargement du modèle SentenceTransformer: {e}\n{traceback.format_exc()}")
@@ -47,64 +74,72 @@ def generate_and_store_embeddings():
 
         # Compter le nombre total de sections à traiter (où embedding IS NULL)
         cursor.execute("SELECT COUNT(id_section) FROM RCP_Sections WHERE embedding IS NULL")
-        total_to_process = cursor.fetchone()[0]
+        total_rows = cursor.fetchone()[0]
 
-        if total_to_process == 0:
+        if total_rows == 0:
             log_info("Aucune section à traiter pour l'embedding (toutes les sections ont déjà un embedding ou la table est vide).")
             return
 
-        log_info(f"Nombre total de sections à traiter pour l'embedding : {total_to_process}")
+        log_info(f"Nombre total de sections à traiter pour l'embedding : {total_rows}")
 
         # Récupérer les sections sans embedding par lots
         cursor.execute("SELECT id_section, texte_section FROM RCP_Sections WHERE embedding IS NULL")
         
         rows_processed_since_commit = 0
-        texts_batch = []
-        ids_batch = []
+        rows_to_update = []
 
-        with tqdm(total=total_to_process, unit="section", desc="Génération Embeddings") as pbar:
-            while True:
-                db_rows = cursor.fetchmany(BATCH_SIZE) # Récupère BATCH_SIZE lignes de la DB
-                if not db_rows:
-                    break # Plus de lignes à traiter dans la DB
+        pbar = tqdm(total=total_rows, desc="Embedding")
+        start_time = time.time()
+        while True:
+            db_rows = cursor.fetchmany(batch_size)  # Récupère batch_size lignes de la DB
+            if not db_rows:
+                break  # Plus de lignes à traiter dans la DB
 
-                current_batch_texts = [row[1] for row in db_rows]
-                current_batch_ids = [row[0] for row in db_rows]
-                
-                try:
-                    # Générer les embeddings pour le lot actuel de textes
-                    # L'option convert_to_numpy=True est par défaut.
-                    embeddings_batch_np = model.encode(current_batch_texts, show_progress_bar=False)
+            current_batch_texts = [row[1] for row in db_rows]
+            current_batch_ids = [row[0] for row in db_rows]
 
-                    # Stocker les embeddings
-                    for section_id, embedding_np in zip(current_batch_ids, embeddings_batch_np):
-                        # Convertir l'array numpy en bytes pour le stockage BLOB
-                        # pickle est une option, .tobytes() une autre. pickle est plus général.
-                        embedding_blob = pickle.dumps(embedding_np)
-                        try:
-                            conn.execute("UPDATE RCP_Sections SET embedding = ? WHERE id_section = ?", 
-                                         (sqlite3.Binary(embedding_blob), section_id))
-                            rows_processed_since_commit += 1
-                        except sqlite3.Error as e_update:
-                            log_error(f"Erreur SQLite lors de la mise à jour de l'embedding pour id_section {section_id}: {e_update}")
-                            # Potentiellement, ajouter à une liste d'échecs pour retenter plus tard
+            try:
+                # Encode the current batch
+                embeddings_batch_np = encode_batch(
+                    model, device, current_batch_texts, batch_size
+                )
 
-                    pbar.update(len(db_rows))
+                # Store embeddings for later commit
+                for section_id, embedding_np in zip(current_batch_ids, embeddings_batch_np):
+                    embedding_blob = embedding_np.tobytes()
+                    rows_to_update.append((sqlite3.Binary(embedding_blob), section_id))
 
-                    if rows_processed_since_commit >= COMMIT_INTERVAL:
-                        conn.commit()
-                        log_info(f"{rows_processed_since_commit} embeddings traités et commit en base.")
-                        rows_processed_since_commit = 0
-                
-                except Exception as e_encode:
-                    log_error(f"Erreur lors de l'encodage ou du stockage d'un lot d'embeddings: {e_encode}\n{traceback.format_exc()}")
-                    # On pourrait choisir de sauter ce lot ou d'arrêter. Pour l'instant, on continue.
+                if len(rows_to_update) >= commit_interval:
+                    cursor.executemany(
+                        "UPDATE RCP_Sections SET embedding=? WHERE id_section=?",
+                        rows_to_update,
+                    )
+                    conn.commit()
+                    rows_to_update.clear()
 
-            # Commit final pour les dernières opérations non encore commitées
-            if rows_processed_since_commit > 0:
-                conn.commit()
-                log_info(f"Commit final de {rows_processed_since_commit} embeddings.")
-        
+                pbar.update(len(db_rows))
+
+            except Exception as e_encode:
+                log_error(
+                    f"Erreur lors de l'encodage ou du stockage d'un lot d'embeddings: {e_encode}\n{traceback.format_exc()}"
+                )
+                # On pourrait choisir de sauter ce lot ou d'arrêter. Pour l'instant, on continue.
+
+        # Flush remaining updates
+        if rows_to_update:
+            cursor.executemany(
+                "UPDATE RCP_Sections SET embedding=? WHERE id_section=?",
+                rows_to_update,
+            )
+            conn.commit()
+            rows_to_update.clear()
+
+        pbar.close()
+        time_elapsed = time.time() - start_time
+        print(
+            f"\u23f1\ufe0f  Done in {time_elapsed:.1f}s \u21d2 {total_rows/time_elapsed:.0f} rows/s"
+        )
+
         log_info("--- Génération et stockage des embeddings terminés ---")
 
     except sqlite3.Error as e:
@@ -121,4 +156,26 @@ def generate_and_store_embeddings():
 if __name__ == "__main__":
     # Assurez-vous que les dépendances sont installées:
     # pip install sentence-transformers torch numpy tqdm
-    generate_and_store_embeddings()
+
+    parser = argparse.ArgumentParser(description="Generate and store embeddings")
+    parser.add_argument(
+        "--model",
+        default="intfloat/multilingual-e5-base",
+        help="SentenceTransformer model to use",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=128,
+        help="Number of texts to encode per batch",
+    )
+    parser.add_argument(
+        "--commit_interval",
+        type=int,
+        default=500,
+        help="Number of embeddings processed before committing to the database",
+    )
+
+    args = parser.parse_args()
+
+    generate_and_store_embeddings(args.model, args.batch_size, args.commit_interval)

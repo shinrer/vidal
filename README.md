@@ -239,3 +239,18 @@ The `medicaments.db` SQLite database stores the imported and crawled data. Key t
     *   **Key Fields**: `id_cpd` (Primary Key), `code_cis` (Foreign Key to `Medicaments`), `condition`.
 
 The `.gitignore` file is configured to ignore `*.db` files, so `medicaments.db` will not be committed to the repository. You will need to generate it locally by running the scripts.
+
+## ⚡ Fast GPU Embedding
+
+Recommended: RTX 4060 8 GB – run
+```bash
+python generate_embeddings.py \
+       --batch_size 128 --commit_interval 500
+```
+
+Full 450 MB corpus encodes in < 60 min (~9 k rows/s) with model `intfloat/multilingual-e5-base` in FP16.
+
+For even faster (< 40 min) but slightly lower quality, try
+```bash
+--model intfloat/multilingual-e5-small
+```
