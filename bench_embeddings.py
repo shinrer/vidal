@@ -4,7 +4,7 @@ import argparse
 from sentence_transformers import SentenceTransformer
 import torch
 
-from generate_embeddings import DATABASE_NAME, encode_batch
+from generate_embeddings import encode_batch, DATABASE_NAME
 
 
 def main():
@@ -32,6 +32,11 @@ def main():
         default=10000,
         help="Number of rows to encode for benchmarking",
     )
+    parser.add_argument(
+        "--database",
+        default=DATABASE_NAME,
+        help="Path to the SQLite database",
+    )
 
     args = parser.parse_args()
 
@@ -43,7 +48,7 @@ def main():
         model.half()
         torch.set_default_dtype(torch.float16)
 
-    conn = sqlite3.connect(DATABASE_NAME)
+    conn = sqlite3.connect(args.database)
     cur = conn.cursor()
     cur.execute("SELECT COUNT(id_section) FROM RCP_Sections WHERE embedding IS NULL")
     total_pending = cur.fetchone()[0]

@@ -254,3 +254,4 @@ For even faster (< 40 min) but slightly lower quality, try
 ```bash
 --model intfloat/multilingual-e5-small
 ```
+You can pass `--database your_db.db` to target a custom SQLite database.

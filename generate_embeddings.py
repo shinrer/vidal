@@ -8,7 +8,7 @@ import traceback
 import argparse
 
 # --- Configuration ---
-DATABASE_NAME = "medicaments.db"
+DATABASE_NAME = "medicaments.db"  # default DB path
 
 # --- Logging ---
 def log_info(message: str):
@@ -17,9 +17,10 @@ def log_info(message: str):
 def log_error(message: str):
     print(f"[{datetime.datetime.now().isoformat()}] ERROR: {message}")
 
-def get_db_connection():
+def get_db_connection(database_name: str = DATABASE_NAME):
+    """Open a SQLite connection with foreign keys enabled."""
     try:
-        conn = sqlite3.connect(DATABASE_NAME, timeout=10)
+        conn = sqlite3.connect(database_name, timeout=10)
         conn.execute("PRAGMA foreign_keys = ON;")
         return conn
     except sqlite3.Error as e:
@@ -45,7 +46,12 @@ def encode_batch(model, device: str, texts, batch_size: int):
             normalize_embeddings=True,
         )
 
-def generate_and_store_embeddings(model_name: str, batch_size: int, commit_interval: int):
+def generate_and_store_embeddings(
+    model_name: str,
+    batch_size: int,
+    commit_interval: int,
+    database_name: str = DATABASE_NAME,
+):
     log_info(
         f"--- Démarrage de la génération d'embeddings avec le modèle : {model_name} ---"
     )
@@ -69,7 +75,7 @@ def generate_and_store_embeddings(model_name: str, batch_size: int, commit_inter
 
     conn = None
     try:
-        conn = get_db_connection()
+        conn = get_db_connection(database_name)
         cursor = conn.cursor()
 
         # Compter le nombre total de sections à traiter (où embedding IS NULL)
@@ -175,7 +181,14 @@ if __name__ == "__main__":
         default=500,
         help="Number of embeddings processed before committing to the database",
     )
+    parser.add_argument(
+        "--database",
+        default=DATABASE_NAME,
+        help="Path to the SQLite database",
+    )
 
     args = parser.parse_args()
 
-    generate_and_store_embeddings(args.model, args.batch_size, args.commit_interval)
+    generate_and_store_embeddings(
+        args.model, args.batch_size, args.commit_interval, args.database
+    )
